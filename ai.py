@@ -187,6 +187,17 @@ def _generate(description, poll_every=2.0, give_up_after=120.0):
     raise TimeoutError(f"image job {job_id} not done after {give_up_after:.0f} s")
 
 
+def _generate_retry(description):
+    """Nicrron sometimes answers 410 Gone for a finished job. Resubmit the job once, then give up."""
+    try:
+        return _generate(description)
+    except requests.HTTPError as e:
+        if e.response is None or e.response.status_code != 410:
+            raise
+        log.warning("Nicrron answered 410 Gone. Resubmitting the image job once.")
+        return _generate(description)
+
+
 def reconstruct(received_webp_bytes, session_id, arrived_bytes, arrived_sha256=None):
     """Rebuild a 512x512 picture at the receiver from only the bytes that arrived.
     Step 1 describes the received image. Step 2 makes a new image from the description.
@@ -204,7 +215,7 @@ def reconstruct(received_webp_bytes, session_id, arrived_bytes, arrived_sha256=N
         description = _describe(received_webp_bytes, session_id)
         start = time.time()
         try:
-            png = _generate(description)
+            png = _generate_retry(description)
         except Exception:
             send_trace("reconstruct-agent", session_id, [{"role": "user", "content": description}],
                        "failed, fell back to plain upscale", int((time.time() - start) * 1000), IMAGE_MODEL)

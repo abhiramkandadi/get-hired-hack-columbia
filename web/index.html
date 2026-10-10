@@ -596,7 +596,7 @@ function onMsgEvent(m, ev) {
     case "text_received": showText(m, ev); break;
     case "caption_received": m.capRx = ev.text; ensurePhoto(m); renderPhoto(m); break;
     case "layer": ensurePhoto(m); m.layers[ev.part] = { ...ev, ai: { state: cfg && cfg.offline ? "offline" : "wait" } }; m.sel = m.sel && m.sel.pinned ? m.sel : { id: ev.part }; renderPhoto(m); break;
-    case "enhanced": if (m.layers[ev.part]) { m.layers[ev.part].ai = { state: ev.url ? "ready" : ev.source === "offline" ? "offline" : "failed", url: ev.url, description: ev.description }; renderPhoto(m); } break;
+    case "enhanced": if (m.layers[ev.part]) { m.layers[ev.part].ai = { state: ev.url ? "ready" : ev.source === "offline" ? "offline" : "failed", url: ev.url, description: ev.description, cached: !!ev.cached }; renderPhoto(m); } break;
     case "transcript_received": m.transcript = ev; ensureVoice(m); renderVoice(m); break;
     case "audio_received": m.audio = ev; ensureVoice(m); renderVoice(m); break;
   }
@@ -690,7 +690,7 @@ function renderPhoto(m) {
   else if (ai.state === "wait") aiFrame = `<div class="shimmer"></div><div class="wait">AI is imagining it from a text description…</div>`;
   else if (ai.state === "offline") aiFrame = `<div class="wait">Offline. The AI step needs the internet, so nothing was invented.</div>`;
   else aiFrame = `<div class="wait">The AI could not run. Nothing was invented.</div>`;
-  const aiCap = ai.state === "ready" ? `AI reconstructed from a text description of those ${n0(n)} bytes. Not the real photo. Detail is invented, not transmitted.`
+  const aiCap = ai.state === "ready" ? `${ai.cached ? "Cached from an earlier run of the same bytes. " : ""}AI reconstructed from a text description of those ${n0(n)} bytes. Not the real photo. Detail is invented, not transmitted.`
     : ai.state === "wait" ? `Built at this phone from only the ${n0(n)} bytes that arrived. It never travels over the mesh.` : `No AI image for these ${n0(n)} bytes.`;
   const html = `
     <figure class="panel real"><div class="verdict">${ic("circle-check")}Faithful · real pixels</div>
@@ -703,7 +703,7 @@ function renderPhoto(m) {
       <div class="frame">${aiFrame}</div>
       <figcaption>${aiCap}</figcaption></figure>`;
   const trio = $(".trio", body);
-  const sig = [sel.part, ai.state, ai.url || ""].join("|");   // only redraw when something changed, so images do not flicker
+  const sig = [sel.part, ai.state, ai.url || "", ai.cached].join("|");   // only redraw when something changed, so images do not flicker
   if (trio.dataset.sig !== sig) { trio.innerHTML = html; trio.dataset.sig = sig; }
   $(".rx-sub", m.rx).innerHTML = `<span class="chip real">Showing ${px}×${px} layer</span>`;
   scroll();

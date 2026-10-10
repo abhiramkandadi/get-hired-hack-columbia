@@ -31,6 +31,9 @@ DEFAULT_SPEED = 10.0
 # Two middle phones (B, C) give the mesh a second route. D is the only way to E.
 POSITIONS = {"A": (100, 300), "B": (260, 180), "C": (260, 420), "D": (420, 300), "E": (620, 300)}
 SRC = "A"
+ROOT = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(ROOT, ".demo_cache")
+DEMO_PHOTO = None      # set by --demo PHOTO. Pre-runs that photo once and caches the AI reconstructions.
 
 
 class Hub:
@@ -96,6 +99,73 @@ class Hub:
         key = f"{len(self.blobs) + 1}-{hashlib.sha1(data).hexdigest()[:8]}"
         self.blobs[key] = (data, mime)
         return f"/blob/{key}"
+
+
+class ReconCache:
+    """AI reconstructions made from received bytes only. The key is the SHA-256 of the bytes that
+    arrived at the destination. The original photo is never stored here and never sent to a model."""
+
+    def __init__(self):
+        self.items = {}
+        self.ready = threading.Event()
+        self.ready.set()
+
+    def get(self, got):
+        key = hashlib.sha256(got).hexdigest()
+        if key not in self.items:
+            png, meta = os.path.join(CACHE_DIR, key + ".png"), os.path.join(CACHE_DIR, key + ".json")
+            if os.path.exists(png) and os.path.exists(meta):
+                with open(png, "rb") as f, open(meta, encoding="utf-8") as m:
+                    self.items[key] = (f.read(), json.load(m)["description"])
+        return self.items.get(key)
+
+    def put(self, got, png, description):
+        key = hashlib.sha256(got).hexdigest()
+        self.items[key] = (png, description)
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        with open(os.path.join(CACHE_DIR, key + ".png"), "wb") as f:
+            f.write(png)
+        with open(os.path.join(CACHE_DIR, key + ".json"), "w", encoding="utf-8") as m:
+            json.dump({"description": description, "received_bytes": len(got)}, m)
+
+
+recon_cache = ReconCache()
+
+
+def prerun_demo(path):
+    """Send the demo photo once over a private mesh with no waiting. Take the bytes that arrive at E.
+    Make the AI reconstruction from those bytes and cache it."""
+    recon_cache.ready.clear()
+    try:
+        mesh = Mesh(seed=SEED, preset=PRESET, loss=0.20, positions=POSITIONS)
+        stats = TransferStats()
+
+        def reconstruct_one(item):
+            layer, got = item
+            if recon_cache.get(got):
+                log.info("demo pre-run: layer %d already cached", layer.index)
+                return
+            png, description, source = ai.reconstruct(got, f"demo-{layer.index}", arrived_bytes=len(got),
+                                                      arrived_sha256=hashlib.sha256(layer.data).hexdigest())
+            if source == "AI":
+                recon_cache.put(got, png, description)
+            log.info("demo pre-run: layer %d (%d bytes) %s", layer.index, len(got),
+                     "cached" if source == "AI" else "not cached, AI failed")
+
+        arrived = []
+        for layer in media.make_layers(path)[1:]:       # one at a time, so the private mesh stays deterministic
+            r = send_message(mesh, SRC, "E", layer.data, stats, lambda m: None)
+            if r.delivered:
+                arrived.append((layer, bytes(r.body)))  # the bytes that came out of the mesh, hash checked
+            else:
+                log.warning("demo pre-run: layer %d not delivered (%s)", layer.index, r.status)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(reconstruct_one, arrived))
+    except Exception:
+        log.exception("demo pre-run failed")
+    finally:
+        recon_cache.ready.set()
+        log.info("demo pre-run finished")
 
 
 hub = Hub()
@@ -271,6 +341,13 @@ def enhance(mid, part, index, got, sha, epoch):
     if h.offline:
         h.emit({"type": "enhanced", "mid": mid, "part": part, "source": "offline", "url": None, "description": ""})
         return
+    if DEMO_PHOTO:
+        recon_cache.ready.wait(timeout=240)
+        hit = recon_cache.get(got)
+        if hit and h.epoch == epoch:
+            h.emit({"type": "enhanced", "mid": mid, "part": part, "source": "AI", "cached": True,
+                    "url": h.blob(hit[0], "image/png"), "description": hit[1]})
+            return
     png, description, source = ai.reconstruct(got, f"{mid:08x}{index}", arrived_bytes=len(got), arrived_sha256=sha)
     if h.epoch != epoch:
         return
@@ -459,9 +536,16 @@ async def startup():
     hub.loop = asyncio.get_running_loop()
     hub.wake = asyncio.Event()
     asyncio.create_task(pump())
+    if DEMO_PHOTO:
+        threading.Thread(target=prerun_demo, args=(DEMO_PHOTO,), daemon=True).start()
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--demo", metavar="PHOTO", default=os.environ.get("DEMO_PHOTO"),
+                        help="demo mode: pre-run this photo at startup and cache the AI reconstructions")
+    DEMO_PHOTO = parser.parse_args().demo
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", "8000")), log_level="warning")

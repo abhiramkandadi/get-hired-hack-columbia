@@ -23,7 +23,7 @@ trace = {
     "project_id": os.environ["PRISMTRACE_PROJECT_ID"],
     "model": MODEL,
     "input_messages": messages,
-    "output_message": {"role": "assistant", "content": reply},
+    "output_message": reply,
     "latency_ms": latency_ms,
     "agent_id": "setup-check",
     "agent_name": "setup-check",
@@ -36,5 +36,4 @@ r = requests.post(
     timeout=15,
 )
 print("PRISM status code:", r.status_code)
-if r.status_code >= 300:
-    print("PRISM response:", r.text[:300])
+print("PRISM response body:", r.text)

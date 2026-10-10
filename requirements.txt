@@ -1,0 +1,7 @@
+openai
+fastapi
+uvicorn
+pillow
+python-dotenv
+requests
+prismtrace-sdk>=0.5.1

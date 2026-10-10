@@ -7,6 +7,7 @@ The CRC covers the header (without the CRC) and the payload.
 import binascii
 import hashlib
 import struct
+import time
 from dataclasses import dataclass
 
 MAX_PACKET = 230
@@ -112,9 +113,14 @@ class Receiver:
         return None
 
 
-def send_hop(msg_id, pieces, fwd, rev, receiver, stats, log, ack_timeout=0.25, max_polls=60):
+def _no_emit(kind, **fields):
+    pass
+
+
+def send_hop(msg_id, pieces, fwd, rev, receiver, stats, log, ack_timeout=0.25, max_polls=60, emit=_no_emit):
     """Send every piece over fwd, then poll for a bitmap and resend only what is missing.
-    Returns True when the receiver holds all pieces. rev carries the bitmap back."""
+    Returns True when the receiver holds all pieces. rev carries the bitmap back.
+    Returns False if the receiver does not answer. emit(kind, **fields) reports live events."""
     total = len(pieces)
     clock = fwd.mesh.clock
     hop = f"{fwd.src.id}->{fwd.dst.id}"
@@ -126,6 +132,8 @@ def send_hop(msg_id, pieces, fwd, rev, receiver, stats, log, ack_timeout=0.25, m
             resend = i in sent_before
             sent_before.add(i)
             stats.resends += resend
+            if resend:
+                emit("resend", hop=hop, piece=i + 1, total=total)
             got = fwd.send(pack(msg_id, DATA, i, total, pieces[i]))
             note = " (resend)" if resend else ""
             if got is None:
@@ -133,6 +141,7 @@ def send_hop(msg_id, pieces, fwd, rev, receiver, stats, log, ack_timeout=0.25, m
             else:
                 receiver.on_packet(got)
                 log(f"{hop} DATA {i + 1}/{total}{note} ok, {receiver.name} has {len(receiver.pieces)} of {total}")
+                emit("piece", hop=hop, to=receiver.name, have=len(receiver.pieces), total=total)
         while True:
             got = fwd.send(pack(msg_id, POLL, 0, total))
             reply = receiver.on_packet(got) if got is not None else None
@@ -141,12 +150,16 @@ def send_hop(msg_id, pieces, fwd, rev, receiver, stats, log, ack_timeout=0.25, m
             if parsed and parsed[1] == BITMAP:
                 missing = decode_bitmap(parsed[4], total)
                 log(f"{hop} bitmap back, missing: {[m + 1 for m in missing] or 'none'}")
+                emit("bitmap", hop=hop, missing=[m + 1 for m in missing], total=total)
                 break
             what = "POLL lost" if got is None else ("BITMAP lost" if reply is not None else "POLL bad")
             polls += 1
             stats.reasks += 1
             log(f"{hop} {what}, timeout, asking again")
+            emit("timeout", hop=hop, what=what)
             clock.advance(ack_timeout)
+            if polls >= 3 and fwd.dst.id in fwd.mesh.dead:
+                return False   # no answer and the phone is off
             if polls >= max_polls:
                 return False
         if not missing:
@@ -161,25 +174,57 @@ class Result:
     body: bytes = b""
 
 
-def send_message(mesh, src, dst, body, stats, log, msg_id=None):
-    """Move body from src to dst, hop by hop. Delivered only if the final hash check passes."""
+def send_message(mesh, src, dst, body, stats, log, msg_id=None, emit=_no_emit, wait_for_route=0.0):
+    """Move body from src to dst, hop by hop. Delivered only if the final hash check passes.
+    If a phone dies, the last phone that holds the full message finds a new route and goes on.
+    If there is no route, wait up to wait_for_route real seconds for one to come back."""
     msg_id = mesh.rng.getrandbits(32) if msg_id is None else msg_id
     pieces = make_pieces(body)
     log(f"Message {msg_id:08x}: {len(body)} bytes, {len(pieces)} pieces, status Queued")
-    path = mesh.route(src, dst)
-    if path is None:
-        return Result("Stuck: no route", False)
-    log(f"Route: {' -> '.join(path)}")
-    for a, b in zip(path, path[1:]):
-        log(f"Status: Sending {a} -> {b}")
-        receiver = Receiver(msg_id, b, stats, log)
-        if not send_hop(msg_id, pieces, mesh.link(a, b), mesh.link(b, a), receiver, stats, log):
-            return Result(f"Stuck: no answer from {b} after repeated tries", False)
-        log(f"Status: Checking at {b}")
-        received = check_blob(receiver.blob())
-        if received is None:
-            return Result(f"Stuck: hash check failed at {b}", False)
-        if b != dst:
-            log(f"Status: At Phone {b} (holds all {len(pieces)} pieces, hash ok)")
+    emit("queued", total=len(pieces), src=src, dst=dst)
+    holder, received = src, body
+    give_up = None
+    while holder != dst:
+        path = None if holder in mesh.dead else mesh.route(holder, dst)
+        if path is None:
+            reason = (f"Phone {holder} holds the message and is off" if holder in mesh.dead
+                      else f"no route from Phone {holder} to Phone {dst}")
+            emit("stuck", reason=reason, holder=holder)
+            give_up = give_up or time.time() + wait_for_route
+            if time.time() >= give_up:
+                return Result(f"Stuck: {reason}", False)
+            time.sleep(0.2)
+            continue
+        give_up = None
+        log(f"Route: {' -> '.join(path)}")
+        emit("route", path=path, holder=holder)
+        for a, b in zip(path, path[1:]):
+            log(f"Status: Sending {a} -> {b}")
+            emit("hop_start", a=a, b=b, total=len(pieces))
+            try:
+                link_ab, link_ba = mesh.link(a, b), mesh.link(b, a)
+            except ValueError:
+                ok = False
+            else:
+                receiver = Receiver(msg_id, b, stats, log)
+                ok = send_hop(msg_id, pieces, link_ab, link_ba, receiver, stats, log, emit=emit)
+            if not ok:
+                if b in mesh.dead or a in mesh.dead:
+                    log(f"Phone {b} is off. {a} still holds the message and finds a new route")
+                    emit("hop_failed", a=a, b=b, reason=f"Phone {b} stopped answering")
+                    break
+                return Result(f"Stuck: no answer from {b} after repeated tries", False)
+            log(f"Status: Checking at {b}")
+            emit("checking", phone=b)
+            received = check_blob(receiver.blob())
+            emit("hash", phone=b, ok=received is not None, final=(b == dst))
+            if received is None:
+                return Result(f"Stuck: hash check failed at {b}", False)
+            holder = b
+            emit("hop_done", a=a, b=b)
+            if b != dst:
+                log(f"Status: At Phone {b} (holds all {len(pieces)} pieces, hash ok)")
+                emit("at", phone=b)
     log(f"Status: Delivered (hash check passed at {dst})")
+    emit("delivered", phone=dst)
     return Result("Delivered", True, received)

@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CHRP Mesh Messenger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js" integrity="sha384-hJnF5AwidE18GSWTAGHv3ByzzvfNZ1Tcx5y1UUV3WkauuMCEzBJBMSwSt/PUPXnM" crossorigin="anonymous"></script>
+<style>
+/* One system. Green means real bytes. Violet means an AI guessed. Red means lost.
+   Type scale: 11 / 12 / 13 / 14 / 16 / 24. Space scale: 4 / 8 / 12 / 16 / 24. Radii: 8 / 12 / 18 / 24. */
+:root {
+  --bg: #0a0f1b;
+  --surface: #101828;
+  --surface-2: #151f33;
+  --surface-3: #1b2740;
+  --border: rgba(160, 180, 220, .14);
+  --border-strong: rgba(160, 180, 220, .26);
+  --text: #eaf0fa;
+  --muted: #a9b6cd;
+  --subtle: #8796b3;
+  --real: #74d6b0;
+  --real-bg: rgba(116, 214, 176, .09);
+  --real-line: rgba(116, 214, 176, .42);
+  --ai: #bba6f6;
+  --ai-bg: rgba(187, 166, 246, .09);
+  --ai-line: rgba(187, 166, 246, .45);
+  --loss: #ef7482;
+  --data: #7cc6e8;
+  --warn: #e6bf72;
+  --out: #3f7fe8;
+
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px; --fs-16: 16px; --fs-24: 24px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --r1: 8px; --r2: 12px; --r3: 18px; --r4: 24px;
+  --font: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: radial-gradient(1100px 640px at 80% -12%, #111d36 0%, var(--bg) 62%);
+  color: var(--text);
+  font: 400 var(--fs-14)/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--data); outline-offset: 2px; }
+.ic { width: 16px; height: 16px; stroke-width: 2; flex: none; }
+
+.app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; gap: var(--s4); padding: var(--s3) var(--s5) var(--s4); }
+
+/* ---------- top bar ---------- */
+.top { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: var(--s3); margin-right: var(--s2); }
+.mark { width: 36px; height: 36px; border-radius: var(--r2); display: grid; place-items: center; background: var(--surface-3); border: 1px solid var(--border-strong); color: var(--data); }
+.mark .ic { width: 20px; height: 20px; }
+.brand b { display: block; font-size: var(--fs-16); font-weight: 650; line-height: 1.2; }
+.brand small { display: block; font-size: var(--fs-11); color: var(--subtle); }
+.top .box { height: 36px; display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s3); border-radius: var(--r2); background: var(--surface); border: 1px solid var(--border); font-size: var(--fs-13); }
+.box label { color: var(--muted); }
+.box output { min-width: 3ch; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.speed-pill { background: rgba(124, 198, 232, .09) !important; border-color: rgba(124, 198, 232, .32) !important; color: #cdeaf8; font-weight: 600; }
+.live { width: 6px; height: 6px; border-radius: 50%; background: var(--data); animation: live 2.4s ease-in-out infinite; }
+@keyframes live { 50% { opacity: .35; } }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 140px; height: 4px; border-radius: 4px; background: var(--border-strong); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 0; }
+input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 0; }
+.seg { display: flex; background: var(--bg); border-radius: var(--r1); padding: 2px; }
+.seg button { border: 0; background: none; color: var(--muted); height: 26px; padding: 0 var(--s2); border-radius: 6px; font-size: var(--fs-12); font-weight: 600; }
+.seg button[aria-pressed=true] { background: var(--surface-3); color: var(--text); }
+.btn { height: 36px; display: inline-flex; align-items: center; gap: var(--s2); padding: 0 var(--s3); border: 1px solid var(--border); background: var(--surface); border-radius: var(--r2); font-size: var(--fs-13); font-weight: 600; transition: background .15s, border-color .15s; }
+.btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.btn.danger { color: #f6b4bc; }
+.pop { position: relative; }
+.pop-menu { position: absolute; top: calc(100% + var(--s2)); left: 0; z-index: 30; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r2); padding: var(--s3); display: none; gap: var(--s2); box-shadow: 0 16px 40px rgba(0,0,0,.45); width: max-content; }
+.pop-menu.open { display: grid; }
+.pop-menu p { margin: 0; color: var(--muted); font-size: var(--fs-12); }
+.pop-menu .row { display: flex; gap: var(--s2); }
+.chip-btn { border: 1px solid var(--border-strong); background: var(--surface); border-radius: var(--r1); height: 32px; min-width: 48px; padding: 0 var(--s3); font-size: var(--fs-13); font-weight: 600; }
+.chip-btn.dead { background: rgba(239, 116, 130, .12); border-color: rgba(239, 116, 130, .45); color: #f6b4bc; }
+.switch button { position: relative; width: 34px; height: 20px; border-radius: 99px; border: 0; background: var(--border-strong); transition: background .2s; padding: 0; }
+.switch button::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.switch button[aria-checked=true] { background: var(--warn); }
+.switch button[aria-checked=true]::after { transform: translateX(14px); }
+.spacer { flex: 1; }
+
+/* ---------- main ---------- */
+.main { display: grid; grid-template-columns: minmax(430px, 540px) 1fr; gap: var(--s5); min-height: 0; }
+
+/* phone */
+.phone { min-height: 0; display: flex; flex-direction: column; border-radius: 42px; border: 1px solid var(--border-strong); background: #0b101c; padding: 10px; box-shadow: 0 28px 70px rgba(0,0,0,.5); }
+.screen { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 32px; overflow: hidden; background: var(--surface); border: 1px solid var(--border); position: relative; }
+.island { position: absolute; top: 9px; left: 50%; transform: translateX(-50%); width: 92px; height: 24px; border-radius: 99px; background: #02040a; z-index: 5; }
+.chat-head { padding: 40px var(--s4) var(--s3); display: flex; align-items: center; gap: var(--s3); border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.avatar { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--surface-3); border: 1px solid var(--border-strong); }
+.chat-head h1 { font-size: var(--fs-14); margin: 0; font-weight: 650; line-height: 1.3; }
+.chat-head p { margin: 0; color: var(--muted); font-size: var(--fs-12); }
+.to-pick { margin-left: auto; display: flex; gap: var(--s1); }
+.to-pick button { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border-strong); background: none; color: var(--muted); font-weight: 650; font-size: var(--fs-12); padding: 0; }
+.to-pick button[aria-pressed=true] { background: var(--out); border-color: var(--out); color: #fff; }
+.thread { flex: 1; overflow-y: auto; padding: var(--s4) var(--s3) var(--s2); display: flex; flex-direction: column; gap: var(--s4); scroll-behavior: smooth; }
+.thread::-webkit-scrollbar { width: 6px; } .thread::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+.empty { margin: auto; text-align: center; color: var(--muted); max-width: 290px; font-size: var(--fs-13); }
+.empty b { color: var(--text); display: block; font-size: var(--fs-16); font-weight: 600; margin-bottom: var(--s1); }
+.msg { display: flex; flex-direction: column; gap: var(--s2); animation: in .25s ease-out; }
+@keyframes in { from { opacity: 0; transform: translateY(6px); } }
+
+.out { align-self: flex-end; max-width: 86%; background: var(--out); color: #fff; padding: var(--s2) var(--s3); border-radius: var(--r3) var(--r3) var(--s1) var(--r3); overflow-wrap: anywhere; font-size: var(--fs-14); }
+.out img { display: block; width: 100%; max-width: 232px; border-radius: var(--r2); margin: var(--s1) 0 var(--s2); }
+.out .meta { font-size: var(--fs-11); opacity: .88; }
+.out.voice { display: flex; align-items: center; gap: var(--s3); }
+.wave { display: flex; align-items: center; gap: 2px; height: 22px; }
+.wave i { width: 3px; border-radius: 2px; background: rgba(255,255,255,.85); }
+
+.status { align-self: flex-end; max-width: 92%; text-align: right; font-size: var(--fs-12); color: var(--muted); }
+.status .line { display: inline-flex; align-items: center; gap: var(--s2); font-weight: 600; font-size: var(--fs-13); }
+.status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--data); }
+.status.sending .dot { animation: live 1.6s ease-in-out infinite; }
+.status.delivered .line { color: var(--real); } .status.delivered .dot { background: var(--real); }
+.status.stuck .line { color: var(--loss); } .status.stuck .dot { background: var(--loss); }
+.status.queued .line { color: var(--muted); } .status.queued .dot { background: var(--subtle); }
+.status.at .line { color: var(--warn); } .status.at .dot { background: var(--warn); }
+.status .sub { display: block; margin-top: 2px; font-size: var(--fs-11); color: var(--subtle); }
+.bar { height: 3px; border-radius: 3px; background: var(--border); margin: var(--s2) 0 0 auto; width: 168px; overflow: hidden; }
+.bar b { display: block; height: 100%; width: 0; background: var(--data); transition: width .3s ease; }
+.status.delivered .bar b { background: var(--real); }
+.steps { display: flex; gap: var(--s1); justify-content: flex-end; margin-top: var(--s2); flex-wrap: wrap; }
+
+/* one chip for steps, tags and layer pickers */
+.chip { display: inline-flex; align-items: center; gap: var(--s1); height: 22px; padding: 0 var(--s2); border-radius: 99px; border: 1px solid var(--border-strong); background: none; color: var(--muted); font-size: var(--fs-11); font-weight: 600; white-space: nowrap; }
+.chip .ic { width: 12px; height: 12px; }
+.chip.sending, .chip.receiving, .chip.checking { color: var(--data); border-color: rgba(124,198,232,.4); }
+.chip.at { color: var(--warn); border-color: rgba(230,191,114,.4); }
+.chip.delivered, .chip.real { color: var(--real); border-color: var(--real-line); background: var(--real-bg); }
+.chip.stuck { color: var(--loss); border-color: rgba(239,116,130,.45); }
+.chip.ai { color: var(--ai); border-color: var(--ai-line); background: var(--ai-bg); }
+.chip.plain { color: var(--muted); }
+.chip.sel { background: var(--real); border-color: var(--real); color: #07271c; }
+button.chip:disabled { color: var(--subtle); border-style: dashed; cursor: default; }
+
+.rx { align-self: flex-start; width: 100%; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r3) var(--r3) var(--r3) var(--s1); padding: var(--s3); animation: in .25s ease-out; }
+.rx-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); margin-bottom: var(--s3); font-size: var(--fs-12); color: var(--muted); }
+.rx-head b { color: var(--text); font-weight: 600; }
+.rx p { margin: 0; overflow-wrap: anywhere; }
+.aibox { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3); border-radius: var(--r2); border: 1px dashed var(--ai-line); background: var(--ai-bg); }
+.aibox[hidden] { display: none; }
+.aibox q { quotes: none; font-size: var(--fs-14); line-height: 1.5; }
+.aibox .row { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; font-size: var(--fs-11); color: var(--muted); }
+.cap { margin-bottom: var(--s3); }
+.layers { display: flex; gap: var(--s2); margin-bottom: var(--s3); flex-wrap: wrap; }
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); }
+.panel { margin: 0; border-radius: var(--r2); padding: var(--s2); display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.panel.real { border: 1.5px solid var(--real-line); background: var(--real-bg); }
+.panel.plain { border: 1.5px solid var(--border-strong); background: rgba(160,180,220,.04); }
+.panel.ai { border: 1.5px dashed var(--ai-line); background: var(--ai-bg); }
+.verdict { font-size: var(--fs-11); font-weight: 650; display: flex; align-items: flex-start; gap: var(--s1); min-height: 28px; line-height: 1.25; }
+.verdict .ic { width: 12px; height: 12px; margin-top: 1px; }
+.panel.real .verdict { color: var(--real); } .panel.plain .verdict { color: var(--muted); } .panel.ai .verdict { color: var(--ai); }
+.frame { position: relative; aspect-ratio: 1; border-radius: var(--r1); overflow: hidden; background: #070b14; display: grid; place-items: center; }
+.frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.panel.real img { image-rendering: pixelated; }
+.panel.ai .frame::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 14px, rgba(187,166,246,.09) 14px 16px); }
+.stamp { position: absolute; left: var(--s2); bottom: var(--s2); z-index: 2; display: inline-flex; align-items: center; gap: var(--s1); height: 20px; padding: 0 var(--s2); border-radius: 99px; font-size: var(--fs-11); font-weight: 700; color: #1b1235; background: var(--ai); }
+.stamp .ic { width: 11px; height: 11px; }
+.wait { padding: var(--s2); text-align: center; font-size: var(--fs-11); color: var(--muted); position: relative; z-index: 1; }
+.shimmer { position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(187,166,246,.16) 50%, transparent 80%); background-size: 200% 100%; animation: sh 1.8s linear infinite; }
+@keyframes sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.panel figcaption { font-size: var(--fs-11); line-height: 1.35; color: var(--muted); }
+.player { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s3); padding: var(--s2) var(--s3); border-radius: var(--r2); border: 1px solid var(--border-strong); background: var(--surface); }
+.player .play { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--real); color: #07271c; display: grid; place-items: center; padding: 0; flex: none; }
+.player .grow { flex: 1; min-width: 0; }
+.player input[type=range] { width: 100%; }
+.player .info { font-size: var(--fs-11); color: var(--muted); margin-top: var(--s1); }
+.player.wait { color: var(--muted); font-size: var(--fs-12); text-align: left; }
+.mini { height: 3px; border-radius: 3px; background: var(--border); overflow: hidden; width: 56px; }
+.mini b { display: block; height: 100%; width: 40%; background: var(--data); animation: slide 1.4s ease-in-out infinite; }
+@keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+.hashline { margin-top: var(--s3); display: flex; align-items: center; gap: var(--s2); font-size: var(--fs-11); color: var(--real); }
+.hashline[hidden] { display: none; }
+.hashline .ic { width: 13px; height: 13px; }
+.notice { align-self: center; display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--fs-11); color: var(--warn); background: rgba(230,191,114,.08); border: 1px solid rgba(230,191,114,.3); padding: var(--s1) var(--s3); border-radius: 99px; }
+
+.toast { position: absolute; left: var(--s4); right: var(--s4); bottom: 74px; z-index: 6; display: none; align-items: center; gap: var(--s2); padding: var(--s3); border-radius: var(--r2); background: #2a1620; border: 1px solid rgba(239,116,130,.45); color: #f8c3c9; font-size: var(--fs-13); }
+.toast.show { display: flex; animation: in .2s ease-out; }
+
+.composer { display: flex; align-items: center; gap: var(--s2); padding: var(--s3) var(--s3) var(--s4); border-top: 1px solid var(--border); background: var(--surface-2); }
+.composer .icon { width: 36px; height: 36px; border-radius: 50%; border: 0; background: var(--surface-3); color: var(--muted); display: grid; place-items: center; padding: 0; flex: none; transition: background .15s, color .15s; }
+.composer .icon:hover { background: var(--border-strong); color: var(--text); }
+.composer .icon .ic { width: 18px; height: 18px; }
+.composer .icon.rec { background: var(--loss); color: #fff; animation: live 1.4s ease-in-out infinite; }
+.composer input[type=text] { flex: 1; min-width: 0; height: 36px; border: 1px solid var(--border-strong); background: var(--bg); border-radius: 99px; padding: 0 var(--s4); outline-offset: 2px; }
+.composer input::placeholder { color: var(--subtle); }
+.composer .send { background: var(--out); color: #fff; }
+.composer .send:hover { background: #5590ee; color: #fff; }
+
+/* map */
+.mapcard { min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: var(--r4); background: linear-gradient(180deg, rgba(21,31,51,.7), rgba(14,21,36,.7)); position: relative; display: flex; flex-direction: column; overflow: hidden; }
+.maphead { display: flex; justify-content: space-between; align-items: baseline; padding: var(--s4) var(--s5) 0; gap: var(--s3); }
+.maphead h2 { margin: 0; font-size: var(--fs-16); font-weight: 650; }
+.maphead span { color: var(--muted); font-size: var(--fs-12); font-variant-numeric: tabular-nums; }
+svg#map { flex: 1; width: 100%; min-height: 0; }
+.link { stroke-linecap: round; transition: stroke .3s; }
+.route { fill: none; stroke: var(--data); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 6 9; opacity: .85; animation: flow 1.2s linear infinite; }
+@keyframes flow { to { stroke-dashoffset: -15; } }
+.llabel { font-size: var(--fs-11); fill: var(--muted); text-anchor: middle; paint-order: stroke; stroke: #0c1422; stroke-width: 4px; }
+.ph { cursor: pointer; }
+.ph circle.body { fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 2; transition: stroke .25s, fill .25s; }
+.ph text.name { font-size: var(--fs-16); font-weight: 650; fill: var(--text); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.ph text.role { font-size: var(--fs-12); fill: var(--muted); text-anchor: middle; pointer-events: none; }
+.ph:hover circle.body { stroke: #5c72a3; }
+.ph.holds circle.body { stroke: var(--warn); fill: #221d12; }
+.ph.done circle.body { stroke: var(--real); fill: #10261f; }
+.ph.dead circle.body { stroke: var(--loss); stroke-dasharray: 4 4; fill: #1b1118; }
+.ph.dead text.name { fill: var(--subtle); }
+.ph .arc { fill: none; stroke: var(--data); stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transition: stroke-dashoffset .2s; opacity: 0; }
+.ph .arc.on { opacity: 1; }
+.ph .ring { fill: none; stroke: var(--data); stroke-width: 1.5; opacity: 0; }
+.ph .ring.go { animation: ring .7s ease-out; }
+@keyframes ring { from { opacity: .8; r: 28; } to { opacity: 0; r: 46; } }
+.ph .count { font-size: var(--fs-11); font-weight: 650; fill: var(--data); text-anchor: middle; }
+.feed { position: absolute; left: var(--s5); bottom: 48px; width: 330px; display: flex; flex-direction: column-reverse; gap: 3px; pointer-events: none; font-size: var(--fs-12); }
+.feed div { color: var(--muted); background: rgba(10,15,27,.72); border-radius: var(--r1); padding: 1px var(--s2); width: fit-content; animation: in .2s ease-out; }
+.feed div:nth-child(n+4) { opacity: .6; } .feed div:nth-child(n+6) { opacity: .3; } .feed div:nth-child(n+8) { display: none; }
+.feed .lost { color: #f6b4bc; } .feed .ok { color: #c6d1e6; } .feed .good { color: var(--real); } .feed .warn { color: var(--warn); }
+.legend { display: flex; gap: var(--s4); padding: 0 var(--s5) var(--s3); color: var(--muted); font-size: var(--fs-12); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: var(--s2); }
+
+/* stats */
+.stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s3); }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r3); padding: var(--s3) var(--s4); display: flex; flex-direction: column; gap: 2px; }
+.stat span { color: var(--muted); font-size: var(--fs-12); line-height: 1.3; }
+.stat b { font-size: var(--fs-24); font-weight: 600; letter-spacing: -.01em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stat.loss b { color: #f3a0aa; }
+.stat.good b { color: var(--real); }
+
+@media (max-width: 1100px) {
+  body { overflow: auto; } .app { height: auto; }
+  .main { grid-template-columns: 1fr; } .phone { height: 780px; } .mapcard { height: 460px; }
+  .stats { grid-template-columns: repeat(3, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="top">
+    <div class="brand">
+      <span class="mark"><i data-lucide="waypoints" class="ic"></i></span>
+      <div><b>CHRP Mesh</b><small>Messages over a simulated LoRa radio mesh</small></div>
+    </div>
+    <div class="box speed-pill" role="status"><span class="live"></span><span id="speedText">Running at 10x real time</span></div>
+    <div class="box" title="Chance that a packet is lost on a link 200 m long. Longer links lose more.">
+      <label for="loss">Packet loss</label>
+      <input id="loss" type="range" min="0" max="40" step="1" value="20">
+      <output id="lossOut">20%</output>
+    </div>
+    <div class="box">
+      <label>Speed</label>
+      <div class="seg" id="speedSeg">
+        <button data-v="1" aria-pressed="false">1x</button><button data-v="5" aria-pressed="false">5x</button><button data-v="10" aria-pressed="true">10x</button><button data-v="50" aria-pressed="false">50x</button>
+      </div>
+    </div>
+    <div class="pop">
+      <button class="btn danger" id="killBtn" aria-haspopup="true" aria-expanded="false"><i data-lucide="power" class="ic"></i><span id="killLbl">Kill a phone</span></button>
+      <div class="pop-menu" id="killMenu"></div>
+    </div>
+    <div class="box switch" title="Offline: the phones have no internet. The mesh still works. AI captions, transcripts and enhancement are off.">
+      <i data-lucide="wifi-off" class="ic"></i>
+      <label for="offline" id="offlineLbl">Offline</label>
+      <button id="offline" role="switch" aria-checked="false"></button>
+    </div>
+    <div class="spacer"></div>
+    <button class="btn" id="resetBtn" title="Clear the chat and start the mesh again with the same seed"><i data-lucide="rotate-ccw" class="ic"></i>Reset</button>
+  </header>
+
+  <main class="main">
+    <section class="phone" aria-label="Phone A">
+      <div class="screen">
+        <div class="island"></div>
+        <div class="chat-head">
+          <div class="avatar" id="avatar">E</div>
+          <div><h1 id="toName">Phone E</h1><p>You are Phone A. Sending over the mesh.</p></div>
+          <div class="to-pick" id="toPick" aria-label="Send to"></div>
+        </div>
+        <div class="thread" id="thread" aria-live="polite"></div>
+        <div class="toast" id="toast" role="alert"><i data-lucide="circle-alert" class="ic"></i><span></span></div>
+        <form class="composer" id="composer" autocomplete="off">
+          <button type="button" class="icon" id="photoBtn" aria-label="Send a photo" title="Send a photo"><i data-lucide="image" class="ic"></i></button>
+          <button type="button" class="icon" id="micBtn" aria-label="Record a voice note"><i data-lucide="mic" class="ic"></i></button>
+          <input type="text" id="text" placeholder="Message" aria-label="Message">
+          <button type="submit" class="icon send" aria-label="Send"><i data-lucide="arrow-up" class="ic"></i></button>
+          <input type="file" id="photoFile" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" hidden>
+          <input type="file" id="voiceFile" accept="audio/*" hidden>
+        </form>
+      </div>
+    </section>
+
+    <section class="mapcard" aria-label="Mesh map">
+      <div class="maphead"><h2 id="routeText">Mesh map</h2><span id="clockText">Mesh clock 0.0 s</span></div>
+      <svg id="map" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Five phones and the links between them">
+        <g id="links"></g><g id="routes"></g><g id="packets"></g><g id="phones"></g>
+      </svg>
+      <div class="feed" id="feed"></div>
+      <div class="legend">
+        <span><i style="background:var(--data)"></i>Data piece</span>
+        <span><i style="background:var(--warn)"></i>Ask or answer</span>
+        <span><i style="background:var(--loss)"></i>Lost</span>
+        <span>Line colour shows loss. Click a phone to switch it off or on.</span>
+      </div>
+    </section>
+  </main>
+
+  <footer class="stats" aria-label="Statistics">
+    <div class="stat"><span>Original bytes</span><b id="sOrig">0</b></div>
+    <div class="stat"><span>Bytes on air, with resends and ACKs</span><b id="sAir">0</b></div>
+    <div class="stat"><span>Resends</span><b id="sRes">0</b></div>
+    <div class="stat loss"><span id="sLostLbl">Packets lost</span><b id="sLost">0</b></div>
+    <div class="stat good"><span>Compression ratio</span><b id="sComp">-</b></div>
+    <div class="stat good"><span>Original bytes per byte on air</span><b id="sPerAir">-</b></div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ic = (name, cls = "") => `<i data-lucide="${name}" class="ic ${cls}"></i>`;
+const NS = "http://www.w3.org/2000/svg";
+const svg = (tag, attrs = {}) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+const fmtS = s => s < 60 ? `${s < 10 ? s.toFixed(1) : Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+const n0 = n => Math.round(n).toLocaleString("en-US");
+const fmtX = v => Number.isInteger(v) ? v : v.toFixed(1);
+
+/* Icons: Lucide from a CDN. Any <i data-lucide> that appears later is turned into an SVG. */
+let iconTimer = 0;
+function paintIcons() { if (window.lucide) lucide.createIcons({ attrs: { "stroke-width": 2 } }); }
+new MutationObserver(() => { clearTimeout(iconTimer); iconTimer = setTimeout(paintIcons, 0); })
+  .observe(document.body, { childList: true, subtree: true });
+window.addEventListener("load", paintIcons);
+
+let ws, cfg = null, dst = "E", preset = "";
+const msgs = new Map();
+let stats = { sent: 0, lost: 0, air: 0, resends: 0, original: 0, payload: 0 };
+let P = {}, phoneEls = {}, linkEls = {}, routeTimer = null;
+
+/* ================= connection ================= */
+function connect() {
+  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
+  ws.onopen = () => resetUI();
+  ws.onmessage = e => handle(JSON.parse(e.data));
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+const cmd = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
+
+const EMPTY = `<div class="empty" id="empty"><b>No messages yet</b>Send text, a photo or a voice note. It will hop from Phone A to the far phone over a radio that loses packets.</div>`;
+function resetUI() {
+  msgs.clear(); $("#thread").innerHTML = EMPTY;
+  stats = { sent: 0, lost: 0, air: 0, resends: 0, original: 0, payload: 0 }; renderStats(true);
+  $("#feed").innerHTML = ""; clearRoute();
+}
+
+/* ================= event handling ================= */
+function handle(ev) {
+  if (ev.t != null) $("#clockText").textContent = `${preset} · mesh clock ${fmtS(ev.t)}`;
+  const m = ev.mid != null ? msgs.get(ev.mid) : null;
+  switch (ev.type) {
+    case "config": applyConfig(ev); break;
+    case "packet": onPacket(ev); break;
+    case "phone": feed(`Phone ${ev.phone} ${ev.dead ? "switched off" : "back on"}`, ev.dead ? "lost" : "good"); break;
+    case "reset": resetUI(); break;
+    case "message": newMessage(ev); break;
+    default: if (m) onMsgEvent(m, ev);
+  }
+}
+
+function applyConfig(c) {
+  const first = !cfg;
+  const geom = !cfg || JSON.stringify(cfg.phones) !== JSON.stringify(c.phones);
+  cfg = c;
+  $("#speedText").textContent = `Running at ${fmtX(c.speed)}x real time`;
+  $("#speedSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.v === c.speed)));
+  $("#loss").value = Math.round(c.loss * 100); $("#lossOut").textContent = `${Math.round(c.loss * 100)}%`;
+  $("#offline").setAttribute("aria-checked", String(c.offline));
+  $("#offlineLbl").textContent = c.offline ? "Offline, AI off" : "Offline";
+  preset = `${c.preset} · ${c.kbps} kbps · seed ${c.seed}`;
+  if (geom) buildMap();
+  updateMapState();
+  buildKillMenu();
+  if (first) buildToPick();
+}
+
+/* ================= map ================= */
+const VB = { w: 800, h: 520, pad: 105 };
+function buildMap() {
+  const names = Object.keys(cfg.phones);
+  const xs = names.map(n => cfg.phones[n].x), ys = names.map(n => cfg.phones[n].y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const s = Math.min((VB.w - 2 * VB.pad) / (maxx - minx || 1), (VB.h - 2 * VB.pad) / (maxy - miny || 1));
+  const ox = (VB.w - (maxx - minx) * s) / 2 - minx * s, oy = (VB.h - (maxy - miny) * s) / 2 - miny * s - 14;
+  P = {}; names.forEach(n => P[n] = { x: cfg.phones[n].x * s + ox, y: cfg.phones[n].y * s + oy });
+  const L = $("#links"), PH = $("#phones"); L.innerHTML = ""; PH.innerHTML = ""; linkEls = {}; phoneEls = {};
+  cfg.links.forEach(l => {
+    const a = P[l.a], b = P[l.b];
+    const g = svg("g");
+    const line = svg("line", { class: "link", x1: a.x, y1: a.y, x2: b.x, y2: b.y, "stroke-width": 2 });
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy);
+    const t = svg("text", { class: "llabel", x: mx - dy / len * 13, y: my + dx / len * 13 + 4 });
+    g.append(line, t); L.appendChild(g); linkEls[l.a + l.b] = linkEls[l.b + l.a] = { line, t };
+  });
+  names.forEach(n => {
+    const g = svg("g", { class: "ph", tabindex: 0, role: "button", "aria-label": `Phone ${n}. Click to switch off or on.` });
+    g.setAttribute("transform", `translate(${P[n].x} ${P[n].y})`);
+    const circ = 2 * Math.PI * 33;
+    g.append(svg("circle", { class: "ring", r: 28 }), svg("circle", { class: "arc", r: 33, "stroke-dasharray": circ, "stroke-dashoffset": circ }),
+      svg("circle", { class: "body", r: 26 }));
+    const t = svg("text", { class: "name" }); t.textContent = n;
+    const role = svg("text", { class: "role", y: 48 });
+    const cnt = svg("text", { class: "count", y: -42 });
+    g.append(t, role, cnt);
+    g.addEventListener("click", () => cmd({ op: "toggle_phone", phone: n }));
+    g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); cmd({ op: "toggle_phone", phone: n }); } });
+    PH.appendChild(g); phoneEls[n] = { g, arc: $(".arc", g), ring: $(".ring", g), role, cnt, circ };
+  });
+  updateMapState();
+}
+const lossColor = l => { const t = Math.min(1, l / 0.4), a = [64, 84, 124], b = [200, 100, 116]; return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * t)).join(",")})`; };
+function updateMapState() {
+  if (!cfg) return;
+  cfg.links.forEach(l => {
+    const e = linkEls[l.a + l.b]; if (!e) return;
+    const off = cfg.dead.includes(l.a) || cfg.dead.includes(l.b);
+    e.line.setAttribute("stroke", off ? "#2a2030" : lossColor(l.loss));
+    e.line.setAttribute("stroke-dasharray", off ? "3 6" : "");
+    e.t.textContent = off ? "" : `${Math.round(l.loss * 100)}%`;
+  });
+  for (const n in phoneEls) {
+    const p = phoneEls[n];
+    p.g.classList.toggle("dead", cfg.dead.includes(n));
+    p.role.textContent = cfg.dead.includes(n) ? "off" : n === cfg.src ? "sender" : n === dst ? "receiver" : "";
+  }
+}
+function setPhoneState(name, cls) {
+  const p = phoneEls[name]; if (!p) return;
+  p.g.classList.toggle("holds", cls === "holds"); p.g.classList.toggle("done", cls === "done");
+}
+function setArc(name, frac, label) {
+  const p = phoneEls[name]; if (!p) return;
+  p.arc.classList.toggle("on", frac != null);
+  if (frac != null) p.arc.setAttribute("stroke-dashoffset", p.circ * (1 - frac));
+  p.cnt.textContent = label || "";
+}
+function showRoute(path) {
+  if (!path || path.length < 2) return;
+  const R = $("#routes"); R.innerHTML = "";
+  R.appendChild(svg("polyline", { class: "route", points: path.map(n => `${P[n].x},${P[n].y}`).join(" ") }));
+  $("#routeText").textContent = `Route ${path.join(" → ")}`;
+  clearTimeout(routeTimer);
+}
+function clearRoute(delay = 0) {
+  clearTimeout(routeTimer);
+  routeTimer = setTimeout(() => { $("#routes").innerHTML = ""; $("#routeText").textContent = "Mesh map";
+    for (const n in phoneEls) { setPhoneState(n, null); setArc(n, null); } }, delay);
+}
+
+/* ---- packet animation ---- */
+const flying = [];
+let raf = 0;
+function onPacket(ev) {
+  stats = ev.stats; renderStats();
+  const a = P[ev.src], b = P[ev.dst]; if (!a || !b) return;
+  const small = ev.ptype !== 1;
+  const c = svg("circle", { r: small ? 3 : 4 + ev.len / 100, fill: small ? "#e6bf72" : "#7cc6e8" });
+  $("#packets").appendChild(c);
+  flying.push({ c, a, b, t0: performance.now(), dur: Math.min(ev.ms, 900), lost: ev.lost, done: false });
+  if (ev.lost) {
+    const e = linkEls[ev.src + ev.dst];
+    if (e) e.line.animate([{ stroke: "#ef7482", strokeWidth: 3.5 }, {}], { duration: 500 });
+  }
+  if (flying.length > 160) flying.shift().c.remove();
+  feed(`${ev.src} → ${ev.dst}  ${["", "data", "ask", "answer"][ev.ptype] || "packet"}  ${ev.lost ? "lost" : "ok"}`, ev.lost ? "lost" : "ok");
+  if (!raf) raf = requestAnimationFrame(tick);
+}
+function tick(now) {
+  for (let i = flying.length - 1; i >= 0; i--) {
+    const f = flying[i], k = (now - f.t0) / f.dur;
+    const end = f.lost ? 0.62 : 1;
+    const u = Math.min(k, end);
+    const pos = f.lost ? u : u * u * (3 - 2 * u);   // lost packets fly straight, then stop
+    f.c.setAttribute("cx", f.a.x + (f.b.x - f.a.x) * pos);
+    f.c.setAttribute("cy", f.a.y + (f.b.y - f.a.y) * pos);
+    if (k >= end && f.lost && !f.done) {
+      f.done = true; f.c.setAttribute("fill", "#ef7482");
+      f.c.animate([{ r: "4px", opacity: 1 }, { r: "15px", opacity: 0 }], { duration: 520, fill: "forwards", easing: "ease-out" });
+      const x = svg("text", { x: f.c.getAttribute("cx"), y: +f.c.getAttribute("cy") + 4, fill: "#ef7482", "font-size": 13, "font-weight": 700, "text-anchor": "middle" });
+      x.textContent = "✕"; $("#packets").appendChild(x);
+      x.animate([{ opacity: 1, transform: "translateY(0)" }, { opacity: 0, transform: "translateY(-12px)" }], { duration: 700, fill: "forwards" });
+      setTimeout(() => x.remove(), 720); f.t0 = now + 9e9; f.kill = now + 520;
+    }
+    if (f.kill && now > f.kill || !f.lost && k >= 1) {
+      f.c.remove(); flying.splice(i, 1);
+      if (!f.lost) { const p = phoneEls[Object.keys(P).find(n => P[n] === f.b)]; if (p) { p.ring.classList.remove("go"); void p.ring.getBoundingClientRect(); p.ring.classList.add("go"); } }
+    }
+  }
+  raf = flying.length ? requestAnimationFrame(tick) : 0;
+}
+function feed(text, cls = "ok") {
+  const f = $("#feed");
+  f.prepend(el("div", cls, esc(text)));
+  while (f.children.length > 9) f.lastChild.remove();
+}
+let toastTimer = 0;
+function toast(text) {
+  const t = $("#toast"); $("span", t).textContent = text; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 6000);
+}
+
+/* ================= stats ================= */
+const tweens = new Map();
+function setNum(id, v) {
+  const node = $(id), from = tweens.get(id) ?? 0; tweens.set(id, v);
+  if (from === v) { node.textContent = n0(v); return; }
+  const t0 = performance.now();
+  (function step(now) { const k = Math.min(1, (now - t0) / 350); node.textContent = n0(from + (v - from) * k); if (k < 1) requestAnimationFrame(step); })(t0);
+}
+let statsTimer = 0;
+function renderStats(zero) {
+  if (zero) { tweens.clear(); ["#sOrig", "#sAir", "#sRes", "#sLost"].forEach(i => $(i).textContent = "0"); $("#sComp").textContent = "-"; $("#sPerAir").textContent = "-"; return; }
+  if (statsTimer) return;
+  statsTimer = setTimeout(() => {
+    statsTimer = 0;
+    setNum("#sOrig", stats.original); setNum("#sAir", stats.air); setNum("#sRes", stats.resends); setNum("#sLost", stats.lost);
+    $("#sLostLbl").textContent = `Packets lost, of ${n0(stats.sent)} sent`;
+    const ratio = r => r >= 10 ? `${Math.round(r)}×` : `${r.toFixed(1)}×`;
+    $("#sComp").textContent = stats.payload ? ratio(stats.original / stats.payload) : "-";
+    $("#sPerAir").textContent = stats.air ? ratio(stats.original / stats.air) : "-";
+  }, 80);
+}
+
+/* ================= messages ================= */
+const WAVE = Array.from({ length: 22 }, (_, i) => 6 + Math.abs(Math.sin(i * 1.7) * 14) + (i % 3) * 2);
+function newMessage(ev) {
+  $("#empty")?.remove();
+  stats.original += ev.original;
+  const m = { id: ev.mid, kind: ev.kind, dst: ev.dst, original: ev.original, parts: {}, order: [], prep: "", stuck: null, eta: null,
+    layers: {}, sel: null, cap: null, capRx: null, transcript: null, audio: null };
+  msgs.set(ev.mid, m);
+  const root = el("div", "msg"); m.root = root;
+  const out = el("div", "out" + (ev.kind === "voice" ? " voice" : ""));
+  if (ev.kind === "text") out.textContent = ev.text;
+  else if (ev.kind === "photo") out.innerHTML = `<img alt="Photo you sent" src="${ev.preview}"><div class="meta">Original photo, ${n0(ev.original)} bytes</div>`;
+  else out.innerHTML = `<div class="wave">${WAVE.map(h => `<i style="height:${h}px"></i>`).join("")}</div><div class="meta">Voice note<br>${n0(ev.original)} bytes</div>`;
+  m.status = el("div", "status queued", `<span class="line"><span class="dot"></span><span class="txt">Queued</span></span><span class="sub"></span><div class="bar"><b></b></div><div class="steps"></div>`);
+  root.append(out, m.status);
+  if (ev.kind === "text") addPart(m, "text", "Message");
+  $("#thread").appendChild(root); scroll();
+  setStatus(m); renderStats();
+}
+const scroll = () => { const t = $("#thread"); requestAnimationFrame(() => t.scrollTop = t.scrollHeight); };
+function addPart(m, id, label, extra = {}) {
+  if (m.parts[id]) return;
+  m.parts[id] = { id, label, state: "queued", hop: null, have: 0, total: 0, hops: 1, hopIdx: 0, ...extra }; m.order.push(id);
+}
+
+function onMsgEvent(m, ev) {
+  const p = ev.part ? m.parts[ev.part] : null;
+  switch (ev.type) {
+    case "prep": m.prep = ev.text; break;
+    case "notice": m.root.insertBefore(el("div", "notice", ic("info") + esc(ev.text)), m.status); break;
+    case "parts": ev.parts.forEach(x => addPart(m, x.id, x.label, { bytes: x.bytes, pieces: x.pieces })); m.codec = ev.codec; break;
+    case "part_skipped": delete m.parts[ev.part]; m.order = m.order.filter(i => i !== ev.part); break;
+    case "caption_made": m.cap = { score: ev.score, reason: ev.reason, text: ev.text }; break;
+    case "queued": if (p) { p.state = "queued"; p.total = ev.total; } break;
+    case "route": if (p) { p.hops = ev.path.length - 1; p.path = ev.path; m.stuck = null; showRoute(ev.path); setPhoneState(ev.path[0], "done"); } break;
+    case "hop_start": if (p) { p.state = "sending"; p.hop = [ev.a, ev.b]; p.have = 0; p.total = ev.total; p.hopIdx = p.path ? p.path.indexOf(ev.a) : 0; m.stuck = null; setArc(ev.b, 0, `0/${ev.total}`); } break;
+    case "piece": if (p) { p.state = "receiving"; p.have = ev.have; p.total = ev.total; setArc(ev.to, ev.have / ev.total, `${ev.have}/${ev.total}`); } break;
+    case "resend": feed(`Resend piece ${ev.piece} of ${ev.total} (${ev.hop})`, "warn"); break;
+    case "bitmap": if (p) { p.note = ev.missing.length ? `Resending ${ev.missing.length}` : ""; if (ev.missing.length) p.state = "sending";
+      feed(ev.missing.length ? `${ev.hop} missing ${ev.missing.join(", ")}` : `${ev.hop} has every piece`, ev.missing.length ? "warn" : "good"); } break;
+    case "timeout": feed(`${ev.hop} ${ev.what}, asking again`, "lost"); break;
+    case "hop_failed": feed(ev.reason + ". Finding a new route", "lost"); if (p) p.note = "Finding a new route"; break;
+    case "checking": if (p) { p.state = "checking"; p.phone = ev.phone; } break;
+    case "hash": feed(`Hash check ${ev.ok ? "passed" : "FAILED"} at Phone ${ev.phone}`, ev.ok ? "good" : "lost"); break;
+    case "hop_done": if (p) { p.hopIdx = (p.path ? p.path.indexOf(ev.b) : 0); p.note = ""; setArc(ev.b, null); setPhoneState(ev.b, "done"); } break;
+    case "at": if (p) { p.state = "at"; p.phone = ev.phone; setPhoneState(ev.phone, "holds"); } break;
+    case "delivered": if (p) { p.state = "delivered"; m.eta = null; m.stuck = null; setArc(m.dst, null); clearRoute(1800); } break;
+    case "stuck": if (p) { p.state = "stuck"; m.stuck = ev.reason; p.phone = ev.holder; setPhoneState(ev.holder, "holds"); } break;
+    case "stuck_final": m.stuck = ev.reason.replace(/^Stuck: /, ""); Object.values(m.parts).forEach(x => { if (x.state !== "delivered") x.state = "stuck"; }); break;
+    case "text_received": showText(m, ev); break;
+    case "caption_received": m.capRx = ev.text; ensurePhoto(m); renderPhoto(m); break;
+    case "layer": ensurePhoto(m); m.layers[ev.part] = { ...ev, ai: { state: cfg && cfg.offline ? "offline" : "wait" } }; m.sel = m.sel && m.sel.pinned ? m.sel : { id: ev.part }; renderPhoto(m); break;
+    case "enhanced": if (m.layers[ev.part]) { m.layers[ev.part].ai = { state: ev.url ? "ready" : ev.source === "offline" ? "offline" : "failed", url: ev.url, description: ev.description }; renderPhoto(m); } break;
+    case "transcript_received": m.transcript = ev; ensureVoice(m); renderVoice(m); break;
+    case "audio_received": m.audio = ev; ensureVoice(m); renderVoice(m); break;
+  }
+  if (ev.eta) m.eta = ev.eta;
+  setStatus(m);
+}
+
+/* ---- status line ---- */
+function partText(p, multi) {
+  const tail = multi ? ` · ${p.label}` : "";
+  switch (p.state) {
+    case "queued": return "Queued" + tail;
+    case "sending": return `Sending · Phone ${p.hop ? p.hop[0] + " → " + p.hop[1] : ""}${p.note ? " · " + p.note : ""}` + tail;
+    case "receiving": return `Receiving ${p.have} of ${p.total} · Phone ${p.hop[1]}${p.note ? " · " + p.note : ""}` + tail;
+    case "checking": return `Checking · Phone ${p.phone}` + tail;
+    case "at": return `At Phone ${p.phone}, holds all ${p.total} pieces` + tail;
+    case "stuck": return `Stuck` + tail;
+    case "delivered": return "Delivered" + tail;
+  }
+}
+function setStatus(m) {
+  const list = m.order.map(i => m.parts[i]);
+  const multi = list.length > 1;
+  const allDone = list.length > 0 && list.every(p => p.state === "delivered");
+  let cls, text, sub = "";
+  const active = list.find(p => ["sending", "receiving", "checking", "at"].includes(p.state)) || list.find(p => p.state === "stuck") || list.find(p => p.state === "queued");
+  if (m.stuck) { cls = "stuck"; text = `Stuck: ${m.stuck}`; sub = "Waiting. The message resumes when a route is back."; }
+  else if (allDone) {
+    cls = "delivered";
+    text = multi ? `Delivered · ${list.length} of ${list.length} parts hash checked` : "Delivered";
+    sub = `SHA-256 hash matched at Phone ${m.dst}`;
+  } else if (active) { cls = active.state === "at" ? "at" : active.state === "queued" ? "queued" : "sending"; text = partText(active, multi); }
+  else { cls = "queued"; text = "Queued"; }
+  if (cls === "queued" && m.prep) sub = m.prep + "…";
+  if (m.eta && cls !== "delivered" && cls !== "stuck" && cfg) {
+    const [b, l] = m.eta, sp = cfg.speed;
+    sub = `Time left ${fmtS(b)} to ${fmtS(l)} mesh time · ${fmtS(b / sp)} to ${fmtS(l / sp)} at ${fmtX(sp)}x`;
+  }
+  m.status.className = "status " + cls;
+  $(".txt", m.status).textContent = text; $(".sub", m.status).textContent = sub;
+  let prog = 0;
+  list.forEach(p => { prog += p.state === "delivered" ? 1 : p.hops ? Math.min(.98, ((p.hopIdx || 0) + (p.total ? p.have / p.total : 0)) / p.hops) : 0; });
+  $(".bar b", m.status).style.width = `${list.length ? (prog / list.length) * 100 : 0}%`;
+  renderSteps(m);
+  if (cls === "delivered" && m.rx) { const h = $(".hashline", m.rx); if (h) h.hidden = false; }
+}
+function renderSteps(m) {
+  const box = $(".steps", m.status);
+  if (m.order.length < 2) { box.innerHTML = ""; return; }
+  const sig = m.order.map(i => i + m.parts[i].state).join();
+  if (box.dataset.sig === sig) return; box.dataset.sig = sig;
+  box.innerHTML = m.order.map(i => { const p = m.parts[i]; return `<span class="chip ${p.state}">${esc(p.label)}${p.state === "delivered" ? ic("check") : ""}</span>`; }).join("");
+}
+
+/* ---- received cards ---- */
+function rxCard(m) {
+  if (m.rx) return m.rx;
+  m.rx = el("div", "rx", `<div class="rx-head"><b>Received at Phone ${m.dst}</b><span class="rx-sub"></span></div><div class="rx-body"></div><div class="hashline" hidden>${ic("shield-check")}Every part passed its SHA-256 hash check</div>`);
+  m.root.appendChild(m.rx); scroll(); return m.rx;
+}
+function showText(m, ev) {
+  const rx = rxCard(m); $(".rx-body", rx).innerHTML = `<p>${esc(ev.text)}</p>`;
+  $(".hashline", rx).hidden = false;
+}
+
+/* photo */
+function ensurePhoto(m) {
+  if (m.photoBuilt) return; m.photoBuilt = true;
+  $(".rx-body", rxCard(m)).innerHTML = `<div class="aibox cap" hidden></div><div class="layers"></div><div class="trio"></div>`;
+}
+function renderPhoto(m) {
+  const body = $(".rx-body", m.rx);
+  const cap = $(".cap", body);
+  if (m.capRx) {
+    cap.hidden = false;
+    const sc = m.cap ? `<span class="chip plain" title="${esc(m.cap.reason)}">Caption check ${m.cap.score.toFixed(2)} of 1</span>` : "";
+    cap.innerHTML = `<q>${esc(m.capRx)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Caption, ${new Blob([m.capRx]).size} bytes, 1 packet ${sc}</div>`;
+  }
+  const have = Object.values(m.layers).sort((a, b) => a.index - b.index);
+  const sel = have.find(l => l.part === (m.sel && m.sel.id)) || have[have.length - 1];
+  if (!sel) return;
+  const all = [["l1", 32], ["l2", 64], ["l3", 128]];
+  $(".layers", body).innerHTML = all.map(([id, px]) => {
+    const l = m.layers[id];
+    return `<button type="button" data-l="${id}" class="chip ${l && l.part === sel.part ? "sel" : l ? "real" : ""}" ${l ? "" : "disabled"}>${px}×${px}${l ? ` · ${n0(l.bytes)} B` : " · waiting"}</button>`;
+  }).join("");
+  $(".layers", body).querySelectorAll("button").forEach(b => b.onclick = () => { m.sel = { id: b.dataset.l, pinned: true }; renderPhoto(m); });
+  const n = sel.bytes, px = sel.pixels, ai = sel.ai;
+  let aiFrame;
+  if (ai.state === "ready") aiFrame = `<img alt="AI reconstruction, invented detail" src="${ai.url}"><span class="stamp">${ic("sparkles")}AI made this</span>`;
+  else if (ai.state === "wait") aiFrame = `<div class="shimmer"></div><div class="wait">AI is imagining it from a text description…</div>`;
+  else if (ai.state === "offline") aiFrame = `<div class="wait">Offline. The AI step needs the internet, so nothing was invented.</div>`;
+  else aiFrame = `<div class="wait">The AI could not run. Nothing was invented.</div>`;
+  const aiCap = ai.state === "ready" ? `AI reconstructed from a text description of those ${n0(n)} bytes. Not the real photo. Detail is invented, not transmitted.`
+    : ai.state === "wait" ? `Built at this phone from only the ${n0(n)} bytes that arrived. It never travels over the mesh.` : `No AI image for these ${n0(n)} bytes.`;
+  const html = `
+    <figure class="panel real"><div class="verdict">${ic("circle-check")}Faithful · real pixels</div>
+      <div class="frame"><img alt="Received ${px} by ${px} image" src="${sel.received}"></div>
+      <figcaption>Received: ${n0(n)} bytes, real pixels</figcaption></figure>
+    <figure class="panel plain"><div class="verdict">${ic("circle-check")}Faithful · only smoothed</div>
+      <div class="frame"><img alt="Plain upscale" src="${sel.upscaled}"></div>
+      <figcaption>Plain upscale of those ${n0(n)} bytes. No AI, no new detail.</figcaption></figure>
+    <figure class="panel ai"><div class="verdict">${ic("sparkles")}Invented detail · not the photo</div>
+      <div class="frame">${aiFrame}</div>
+      <figcaption>${aiCap}</figcaption></figure>`;
+  const trio = $(".trio", body);
+  const sig = [sel.part, ai.state, ai.url || ""].join("|");   // only redraw when something changed, so images do not flicker
+  if (trio.dataset.sig !== sig) { trio.innerHTML = html; trio.dataset.sig = sig; }
+  $(".rx-sub", m.rx).innerHTML = `<span class="chip real">Showing ${px}×${px} layer</span>`;
+  scroll();
+}
+
+/* voice */
+function ensureVoice(m) {
+  if (m.voiceBuilt) return; m.voiceBuilt = true;
+  $(".rx-body", rxCard(m)).innerHTML = `<div class="aibox tr" hidden></div><div class="player wait"><div class="mini"><b></b></div>Audio is still on its way…</div>`;
+}
+function renderVoice(m) {
+  const body = $(".rx-body", m.rx);
+  const tr = $(".tr", body);
+  if (m.transcript) { tr.hidden = false; tr.innerHTML = `<q>${esc(m.transcript.text)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Transcript, ${n0(m.transcript.bytes)} bytes${m.audio ? "" : ". It arrived before the audio."}</div>`; }
+  if (m.audio && !m.playerBuilt) {
+    m.playerBuilt = true;
+    const pl = $(".player", body); pl.className = "player";
+    pl.innerHTML = `<button type="button" class="play" aria-label="Play voice note"></button><div class="grow"><input type="range" min="0" max="1000" value="0" aria-label="Seek"><div class="info"></div></div>`;
+    const a = new Audio(m.audio.url), btn = $(".play", pl), seek = $("input", pl), info = $(".info", pl);
+    btn.innerHTML = ic("play");
+    info.textContent = `${m.audio.codec} · ${n0(m.audio.bytes)} bytes received · ${m.audio.seconds} s · plays what arrived`;
+    btn.onclick = () => a.paused ? a.play() : a.pause();
+    a.onplay = () => btn.innerHTML = ic("pause"); a.onpause = a.onended = () => btn.innerHTML = ic("play");
+    a.ontimeupdate = () => { if (a.duration) seek.value = a.currentTime / a.duration * 1000; };
+    seek.oninput = () => { if (a.duration) a.currentTime = seek.value / 1000 * a.duration; };
+    scroll();
+  }
+}
+
+/* ================= controls ================= */
+function buildToPick() {
+  const box = $("#toPick"); box.innerHTML = "";
+  Object.keys(cfg.phones).filter(n => n !== cfg.src).forEach(n => {
+    const b = el("button", "", n); b.type = "button"; b.setAttribute("aria-pressed", String(n === dst)); b.setAttribute("aria-label", `Send to Phone ${n}`);
+    b.onclick = () => { dst = n; $("#toName").textContent = `Phone ${n}`; $("#avatar").textContent = n; box.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b))); updateMapState(); };
+    box.appendChild(b);
+  });
+}
+function buildKillMenu() {
+  const menu = $("#killMenu"); menu.innerHTML = "<p>Switch a phone off or back on</p>";
+  const row = el("div", "row");
+  Object.keys(cfg.phones).forEach(n => {
+    const dead = cfg.dead.includes(n), b = el("button", "chip-btn" + (dead ? " dead" : ""), dead ? `${n} off` : n); b.type = "button";
+    b.onclick = () => cmd({ op: "toggle_phone", phone: n }); row.appendChild(b);
+  });
+  menu.appendChild(row);
+  $("#killLbl").textContent = cfg.dead.length ? `Phones off: ${cfg.dead.join(", ")}` : "Kill a phone";
+}
+$("#killBtn").onclick = e => { e.stopPropagation(); const o = $("#killMenu").classList.toggle("open"); $("#killBtn").setAttribute("aria-expanded", o); };
+document.addEventListener("click", e => { if (!e.target.closest(".pop")) $("#killMenu").classList.remove("open"); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("#killMenu").classList.remove("open"); });
+$("#loss").addEventListener("input", e => { $("#lossOut").textContent = `${e.target.value}%`; cmd({ op: "loss", value: e.target.value / 100 }); });
+$("#speedSeg").addEventListener("click", e => { const b = e.target.closest("button"); if (b) cmd({ op: "speed", value: +b.dataset.v }); });
+$("#offline").onclick = () => cmd({ op: "offline", value: $("#offline").getAttribute("aria-checked") !== "true" });
+$("#resetBtn").onclick = () => cmd({ op: "reset" });
+
+async function send(fd) {
+  fd.append("dst", dst);
+  try {
+    const r = await fetch("/api/send", { method: "POST", body: fd });
+    if (!r.ok) toast((await r.json().catch(() => ({}))).error || `The server refused the message (${r.status}).`);
+  } catch (err) {
+    toast("Could not reach the server. Check that it is still running.");
+  }
+}
+function sendFile(kind, input) {
+  const f = input.files[0]; input.value = "";
+  if (!f) return;
+  const fd = new FormData(); fd.append("kind", kind); fd.append("file", f, f.name); send(fd);
+}
+$("#composer").addEventListener("submit", e => {
+  e.preventDefault(); const t = $("#text").value.trim(); if (!t) return;
+  const fd = new FormData(); fd.append("kind", "text"); fd.append("text", t); $("#text").value = ""; send(fd);
+});
+$("#photoBtn").onclick = () => $("#photoFile").click();
+$("#photoFile").onchange = e => sendFile("photo", e.target);
+$("#voiceFile").onchange = e => sendFile("voice", e.target);
+
+let rec = null;
+const micIcon = on => { $("#micBtn").innerHTML = ic(on ? "square" : "mic"); $("#micBtn").classList.toggle("rec", on); };
+$("#micBtn").onclick = async e => {
+  if (e.shiftKey) return $("#voiceFile").click();
+  if (rec) { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mr = new MediaRecorder(stream), chunks = [];
+    mr.ondataavailable = d => chunks.push(d.data);
+    mr.onstop = () => {
+      stream.getTracks().forEach(t => t.stop()); rec = null; micIcon(false);
+      const blob = new Blob(chunks, { type: mr.mimeType }); if (blob.size < 800) return;
+      const fd = new FormData(); fd.append("kind", "voice"); fd.append("file", blob, "voice." + (mr.mimeType.includes("mp4") ? "m4a" : "webm")); send(fd);
+    };
+    rec = mr; mr.start(); micIcon(true);
+  } catch (err) { $("#voiceFile").click(); }
+};
+$("#micBtn").title = "Click to record, click again to send. Shift-click to pick an audio file.";
+
+connect();
+</script>
+</body>
+</html>

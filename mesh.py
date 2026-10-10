@@ -74,15 +74,20 @@ class Link:
         self.mesh = mesh
         self.src = src
         self.dst = dst
-        self.loss = mesh.loss_at(src.distance_to(dst))
+
+    @property
+    def loss(self):
+        return self.mesh.loss_at(self.src.distance_to(self.dst))
 
     def send(self, packet_bytes):
         """Returns the bytes that arrive, or None if the packet was lost."""
         mesh = self.mesh
+        lost = mesh.rng.random() < self.loss or self.src.id in mesh.dead or self.dst.id in mesh.dead
+        mesh.tap(self.src.id, self.dst.id, packet_bytes, lost)
         mesh.clock.advance(airtime(len(packet_bytes), mesh.preset))
         mesh.stats.packets_sent += 1
         mesh.stats.bytes_on_air += len(packet_bytes)
-        if mesh.rng.random() < self.loss:
+        if lost:
             mesh.stats.packets_lost += 1
             return None
         if mesh.corrupt > 0 and mesh.rng.random() < mesh.corrupt:
@@ -96,7 +101,7 @@ class Mesh:
     loss is the loss on a link of one spacing. Loss grows with distance squared."""
 
     def __init__(self, seed=42, preset="Medium Fast", loss=0.20, corrupt=0.0,
-                 spacing=200.0, radio_range=250.0, speed=10.0):
+                 spacing=200.0, radio_range=250.0, speed=10.0, positions=None):
         self.rng = random.Random(seed)
         self.preset = preset
         self.corrupt = corrupt
@@ -104,16 +109,18 @@ class Mesh:
         self.loss_at_spacing = loss
         self.clock = SimClock(speed)
         self.stats = AirStats()
-        self.phones = {
-            name: Phone(name, 100 + i * spacing, 500, radio_range)
-            for i, name in enumerate("ABCDE")
-        }
+        self.dead = set()      # phones that are switched off
+        self.tap = lambda src, dst, packet_bytes, lost: None   # the server listens here
+        positions = positions or {name: (100 + i * spacing, 500) for i, name in enumerate("ABCDE")}
+        self.phones = {name: Phone(name, x, y, radio_range) for name, (x, y) in positions.items()}
 
     def loss_at(self, distance):
         return min(1.0, self.loss_at_spacing * (distance / self.spacing) ** 2)
 
     def in_range(self, a, b):
         d = a.distance_to(b)
+        if a.id in self.dead or b.id in self.dead:
+            return False
         return a.id != b.id and d <= a.range and d <= b.range
 
     def neighbors(self, name):

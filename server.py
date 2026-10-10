@@ -12,7 +12,7 @@ import queue
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 
 import uvicorn
 from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
@@ -34,7 +34,11 @@ POSITIONS = {"A": (100, 300), "B": (260, 180), "C": (260, 420), "D": (420, 300),
 SRC = "A"
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CACHE_DIR = os.path.join(ROOT, ".demo_cache")
-DEMO_PHOTO = None      # set by --demo PHOTO. Pre-runs that photo once and caches the AI reconstructions.
+DEMO_PHOTO = None      # set by --demo PHOTO. Pre-runs that photo once and caches the AI results.
+VOICE = os.path.join(ROOT, "voice.m4a")
+DEMO_TEXT = "Meet at the north gate at noon. Bring water."
+DEMO_SPEED = 5.0       # slow enough to watch
+DEMO_FILE = os.path.join(CACHE_DIR, "demo_assets.json")
 
 
 class Hub:
@@ -48,6 +52,9 @@ class Hub:
         self.clients = set()
         self.ids = itertools.count(1)
         self.claim = None       # the preset rate claim, checked against the PRISM Knowledge Base
+        self.demo = {"available": False, "ready": False, "reason": "", "running": False, "done": False}
+        self.assets = None      # AI results saved for the demo run: caption, transcript and so on
+        self.hook = None        # the demo run listens to events here
         self.reset()
 
     def reset(self):
@@ -69,6 +76,8 @@ class Hub:
         self.pending.put(ev)
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self.wake.set)
+        if self.hook is not None:
+            self.hook(ev)
 
     def tap(self, src, dst, packet_bytes, lost):
         m = self.mesh
@@ -95,7 +104,8 @@ class Hub:
         return {"type": "config", "phones": {n: {"x": p.x, "y": p.y} for n, p in m.phones.items()},
                 "links": links, "dead": sorted(m.dead), "offline": self.offline,
                 "speed": m.clock.speed, "loss": m.loss_at_spacing, "preset": m.preset,
-                "kbps": round(bit_rate(m.preset) / 1000, 2), "seed": SEED, "src": SRC, "claim": self.claim}
+                "kbps": round(bit_rate(m.preset) / 1000, 2), "seed": SEED, "src": SRC, "claim": self.claim,
+                "demo": dict(self.demo)}
 
     def blob(self, data, mime):
         key = f"{len(self.blobs) + 1}-{hashlib.sha1(data).hexdigest()[:8]}"
@@ -138,6 +148,7 @@ def prerun_demo(path):
     """Send the demo photo once over a private mesh with no waiting. Take the bytes that arrive at E.
     Make the AI reconstruction from those bytes and cache it."""
     recon_cache.ready.clear()
+    arrived = []
     try:
         mesh = Mesh(seed=SEED, preset=PRESET, loss=0.20, positions=POSITIONS)
         stats = TransferStats()
@@ -154,7 +165,6 @@ def prerun_demo(path):
             log.info("demo pre-run: layer %d (%d bytes) %s", layer.index, len(got),
                      "cached" if source == "AI" else "not cached, AI failed")
 
-        arrived = []
         for layer in media.make_layers(path)[1:]:       # one at a time, so the private mesh stays deterministic
             r = send_message(mesh, SRC, "E", layer.data, stats, lambda m: None)
             if r.delivered:
@@ -167,7 +177,51 @@ def prerun_demo(path):
         log.exception("demo pre-run failed")
     finally:
         recon_cache.ready.set()
-        log.info("demo pre-run finished")
+    try:
+        hub.assets = prepare_demo_assets(path)
+    except Exception:
+        log.exception("demo assets failed")
+    ready = bool(hub.assets) and len(arrived) == 3 and all(recon_cache.get(got) for _, got in arrived)
+    hub.demo.update(ready=ready, reason="" if ready else
+                    "The demo needs its AI results saved once. Connect to the internet and restart with --demo.")
+    log.info("demo pre-run finished. Demo run ready: %s", ready)
+    hub.emit(hub.config())
+
+
+def prepare_demo_assets(path):
+    """Make the AI results that the demo run shows, and save them. The run itself then uses no network.
+    They are the caption and its score, the evaluator verdict, the transcript, and the guardrail result."""
+    with open(path, "rb") as f:
+        photo_sha = hashlib.sha256(f.read()).hexdigest()
+    with open(VOICE, "rb") as f:
+        raw = f.read()
+    voice_sha = hashlib.sha256(raw).hexdigest()
+    if os.path.exists(DEMO_FILE):
+        with open(DEMO_FILE, encoding="utf-8") as f:
+            saved = json.load(f)
+        if saved.get("photo_sha") == photo_sha and saved.get("voice_sha") == voice_sha:
+            log.info("demo assets: loaded from %s", DEMO_FILE)
+            return saved
+    photo = media.for_ai(path)
+    caption = ai.caption(photo, "demo-caption")
+    handle = {}
+    score, reason = ai.check_caption(photo, caption, "demo-caption", handle=handle)
+    verdict = None
+    if handle.get("thread") is not None:
+        handle["thread"].join(30)
+    if handle.get("row"):
+        verdict = prism.evaluate_trace(handle["row"]["id"], "caption-checker")
+        if verdict.get("status") not in ("pass", "fail"):
+            verdict = None
+    transcript = ai.transcribe(raw, "demo-transcript", os.path.basename(VOICE)).strip()
+    guard = prism.guardrail_check(DEMO_TEXT)
+    saved = {"photo_sha": photo_sha, "voice_sha": voice_sha, "caption": caption, "score": score, "reason": reason,
+             "eval": verdict, "transcript": transcript, "guard": guard if guard["status"] == "clean" else None}
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(DEMO_FILE, "w", encoding="utf-8") as f:
+        json.dump(saved, f, indent=1)
+    log.info("demo assets: made and saved")
+    return saved
 
 
 hub = Hub()
@@ -253,6 +307,7 @@ def job_text(mid, text, dst):
     if r.delivered:
         hub.emit({"type": "text_received", "mid": mid, "text": r.body.decode("utf-8")})
     done(mid, r)
+    return r
 
 
 def done(mid, r):
@@ -262,6 +317,13 @@ def done(mid, r):
 
 prep_pool = ThreadPoolExecutor(max_workers=6)      # AI work that must not delay the radio
 enhance_pool = ThreadPoolExecutor(max_workers=3)   # slow image jobs at the destination
+
+
+def resolved(value):
+    """A future that already holds its value."""
+    f = Future()
+    f.set_result(value)
+    return f
 
 
 def make_caption(mid, path):
@@ -303,14 +365,18 @@ def make_transcript(mid, raw, name):
         return None
 
 
-def job_photo(mid, path, dst):
+def job_photo(mid, path, dst, assets=None):
     """The radio starts at once with the 32x32 layer. The caption is made on the side
     and goes out at the next layer boundary after it is ready."""
     h = hub
     epoch = h.epoch
     original = os.path.getsize(path)
     layers = media.make_layers(path)[1:]
-    cap = None if h.offline else prep_pool.submit(make_caption, mid, path)
+    futures = []      # the AI image jobs at the destination, so the demo run can wait for them
+    if assets:
+        cap = resolved(assets["caption"].encode("utf-8"))   # saved earlier, so no network call now
+    else:
+        cap = None if h.offline else prep_pool.submit(make_caption, mid, path)
     if cap is None:
         note(mid, "Offline: no AI caption.", "notice")
     names = {1: "l1", 2: "l2", 3: "l3"}
@@ -318,6 +384,11 @@ def job_photo(mid, path, dst):
     parts += [{"id": names[l.index], "label": f"{l.pixels}×{l.pixels}", "bytes": len(l.data),
                "pieces": media.packets_needed(l.data)} for l in layers]
     h.emit({"type": "parts", "mid": mid, "parts": parts})
+    if assets:
+        h.emit({"type": "caption_made", "mid": mid, "text": assets["caption"], "score": assets["score"],
+                "reason": assets["reason"], "cached": True})
+        if assets.get("eval"):
+            h.emit({"type": "caption_eval", "mid": mid, **assets["eval"], "cached": True})
 
     def send_caption(block):
         nonlocal cap
@@ -337,20 +408,21 @@ def job_photo(mid, path, dst):
 
     for n, layer in enumerate(layers):
         if h.epoch != epoch or not send_caption(False):
-            return
+            return futures
         later = sum(media.packets_needed(l.data) for l in layers[n + 1:])
         r = deliver(mid, names[layer.index], layer.data, dst, later)
         if not r.delivered:
             done(mid, r)
-            return
+            return futures
         got = bytes(r.body)
         sha = hashlib.sha256(layer.data).hexdigest()
         h.emit({"type": "layer", "mid": mid, "part": names[layer.index], "index": layer.index, "pixels": layer.pixels,
                 "bytes": len(got), "original": original,
                 "received": h.blob(got, "image/webp"), "upscaled": h.blob(ai.plain_upscale(got), "image/png")})
-        enhance_pool.submit(enhance, mid, names[layer.index], layer.index, got, sha, epoch)
+        futures.append(enhance_pool.submit(enhance, mid, names[layer.index], layer.index, got, sha, epoch))
     if send_caption(True):
         h.emit({"type": "message_done", "mid": mid})
+    return futures
 
 
 def enhance(mid, part, index, got, sha, epoch):
@@ -373,13 +445,16 @@ def enhance(mid, part, index, got, sha, epoch):
             "url": h.blob(png, "image/png") if png and source == "AI" else None, "description": description})
 
 
-def job_voice(mid, path, dst):
+def job_voice(mid, path, dst, assets=None):
     """The audio goes out at once. The transcript is made on the side. It goes out first
     if it is ready when the audio starts, otherwise right after the audio."""
     h = hub
     with open(path, "rb") as f:
         raw = f.read()
-    tr = None if h.offline else prep_pool.submit(make_transcript, mid, raw, os.path.basename(path))
+    if assets:
+        tr = resolved(assets["transcript"].encode("utf-8"))   # saved earlier, so no network call now
+    else:
+        tr = None if h.offline else prep_pool.submit(make_transcript, mid, raw, os.path.basename(path))
     if tr is None:
         note(mid, "Offline: no AI transcript.", "notice")
     audio, codec = media.encode_voice(path)
@@ -401,7 +476,8 @@ def job_voice(mid, path, dst):
         if not r.delivered:
             done(mid, r)
             return False
-        h.emit({"type": "transcript_received", "mid": mid, "text": r.body.decode("utf-8"), "bytes": len(r.body)})
+        h.emit({"type": "transcript_received", "mid": mid, "text": r.body.decode("utf-8"), "bytes": len(r.body),
+                "cached": bool(assets)})
         return True
 
     if not send_transcript(False):
@@ -414,6 +490,80 @@ def job_voice(mid, path, dst):
             "codec": codec, "bytes": len(r.body), "seconds": round(seconds, 1)})
     if send_transcript(True):
         h.emit({"type": "message_done", "mid": mid})
+
+
+def failed(mid):
+    return any(e["type"] == "stuck_final" and e.get("mid") == mid for e in hub.history)
+
+
+def run_demo():
+    """The whole demo, by itself. Text, then the photo, then a voice note with phone B switched off
+    in the middle of the audio. It uses the saved AI results, so nothing waits on the network."""
+    h, assets = hub, hub.assets
+    try:
+        h.reset()
+        h.emit({"type": "reset"})
+        h.mesh.clock.speed = DEMO_SPEED
+        h.emit(h.config())
+
+        def stage(n, state):
+            h.emit({"type": "demo", "stage": n, "state": state})
+
+        def finish_stage(n, mid):
+            if failed(mid):
+                stage(n, "failed")
+                raise RuntimeError(f"stage {n} did not deliver")
+            stage(n, "done")
+            time.sleep(1.2)
+
+        # 1. text
+        stage(1, "running")
+        mid = next(h.ids)
+        h.original_bytes += len(DEMO_TEXT.encode())
+        guard = dict(assets["guard"], cached=True) if assets.get("guard") else {"status": "offline"}
+        h.emit({"type": "message", "mid": mid, "kind": "text", "dst": "E", "src": SRC, "original": len(DEMO_TEXT.encode()),
+                "text": DEMO_TEXT, "preview": None, "offline": False, "guardrail": guard})
+        job_text(mid, DEMO_TEXT, "E")
+        finish_stage(1, mid)
+
+        # 2. photo
+        stage(2, "running")
+        mid = next(h.ids)
+        original = os.path.getsize(DEMO_PHOTO)
+        h.original_bytes += original
+        h.emit({"type": "message", "mid": mid, "kind": "photo", "dst": "E", "src": SRC, "original": original, "text": "",
+                "preview": h.blob(media.for_ai(DEMO_PHOTO, 480), "image/jpeg"), "offline": False, "guardrail": None})
+        wait(job_photo(mid, DEMO_PHOTO, "E", assets), timeout=30)
+        finish_stage(2, mid)
+
+        # 3. voice, and switch off phone B while the audio crosses it
+        stage(3, "running")
+        fired = []
+
+        def kill_b(ev):
+            if fired or ev["type"] != "piece" or ev.get("part") != "audio" or ev.get("to") != "B" or ev.get("have", 0) < 2:
+                return
+            fired.append(1)
+            h.mesh.dead.add("B")
+            h.emit({"type": "phone", "phone": "B", "dead": True})
+            h.emit(h.config())
+
+        h.hook = kill_b
+        mid = next(h.ids)
+        original = os.path.getsize(VOICE)
+        h.original_bytes += original
+        h.emit({"type": "message", "mid": mid, "kind": "voice", "dst": "E", "src": SRC, "original": original, "text": "",
+                "preview": None, "offline": False, "guardrail": None})
+        job_voice(mid, VOICE, "E", assets)
+        h.hook = None
+        finish_stage(3, mid)
+    except Exception:
+        log.exception("demo run failed")
+    finally:
+        h.hook = None
+        h.demo.update(running=False, done=True)
+        h.emit({"type": "demo", "state": "finished"})
+        h.emit(h.config())
 
 
 def worker():
@@ -443,6 +593,19 @@ def index():
     return FileResponse(os.path.join(WEB, "index.html"))
 
 
+@app.post("/api/demo")
+def start_demo():
+    d = hub.demo
+    if d["running"]:
+        return JSONResponse({"error": "The demo is already running."}, status_code=409)
+    if not d["ready"]:
+        return JSONResponse({"error": d["reason"] or "The demo is not ready yet."}, status_code=409)
+    d.update(running=True, done=False)
+    hub.emit(hub.config())
+    threading.Thread(target=run_demo, daemon=True).start()
+    return {"started": True}
+
+
 @app.get("/blob/{key}")
 def blob(key: str):
     item = hub.blobs.get(key)
@@ -461,6 +624,8 @@ def check_upload(kind, path, data, content_type):
 
 @app.post("/api/send")
 async def send(kind: str = Form(...), dst: str = Form("E"), text: str = Form(""), file: UploadFile = File(None)):
+    if hub.demo["running"]:
+        return JSONResponse({"error": "The demo is running. Wait for it to finish."}, status_code=409)
     if dst not in hub.mesh.phones or dst == SRC:
         return JSONResponse({"error": "Pick a phone other than A."}, status_code=400)
     mid = next(hub.ids)
@@ -504,6 +669,8 @@ async def send(kind: str = Form(...), dst: str = Form("E"), text: str = Form("")
 # ---------- websocket ----------
 
 def apply_command(cmd):
+    if hub.demo["running"]:
+        return          # the demo run owns the mesh until it finishes
     m = hub.mesh
     op = cmd.get("op")
     if op == "loss":
@@ -516,6 +683,7 @@ def apply_command(cmd):
     elif op == "offline":
         hub.offline = bool(cmd["value"])
     elif op == "reset":
+        hub.demo["done"] = False
         hub.reset()
         hub.emit({"type": "reset"})
     else:
@@ -570,6 +738,10 @@ async def startup():
     hub.loop = asyncio.get_running_loop()
     hub.wake = asyncio.Event()
     asyncio.create_task(pump())
+    if DEMO_PHOTO and os.path.exists(VOICE):
+        hub.demo.update(available=True, ready=False, reason="Preparing the demo")
+    else:
+        hub.demo.update(available=False, reason="Start the server with --demo photo.jpg to turn the demo on.")
     threading.Thread(target=ground_claim, daemon=True).start()
     if DEMO_PHOTO:
         threading.Thread(target=prerun_demo, args=(DEMO_PHOTO,), daemon=True).start()

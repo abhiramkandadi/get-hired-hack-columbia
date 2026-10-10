@@ -51,7 +51,7 @@ button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--data); outline-offset: 2px; }
 .ic { width: 16px; height: 16px; stroke-width: 2; flex: none; }
 
-.app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; gap: var(--s4); padding: var(--s3) var(--s5) var(--s4); }
+.app { height: 100vh; display: grid; grid-template-rows: auto auto 1fr auto; gap: var(--s4); padding: var(--s3) var(--s5) var(--s4); }
 
 /* ---------- top bar ---------- */
 .top { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
@@ -66,6 +66,26 @@ button { cursor: pointer; }
 .speed-pill { background: rgba(124, 198, 232, .09) !important; border-color: rgba(124, 198, 232, .32) !important; color: #cdeaf8; font-weight: 600; }
 .live { width: 6px; height: 6px; border-radius: 50%; background: var(--data); animation: live 2.4s ease-in-out infinite; }
 @keyframes live { 50% { opacity: .35; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+/* demo bar */
+.demo-bar { display: flex; align-items: center; justify-content: center; gap: var(--s4); flex-wrap: wrap; }
+.demo-btn { height: 44px; padding: 0 var(--s5); border-radius: var(--r3); border: 0; background: var(--out); color: #fff; font-size: var(--fs-16); font-weight: 650; display: inline-flex; align-items: center; gap: var(--s2); box-shadow: 0 6px 22px rgba(63, 127, 232, .32); transition: background .15s; }
+.demo-btn .ic { width: 18px; height: 18px; }
+.demo-btn:hover:not(:disabled) { background: #5590ee; }
+.demo-btn:disabled { background: var(--surface-3); color: var(--muted); box-shadow: none; cursor: default; }
+.demo-btn.reset { background: var(--surface); border: 1px solid var(--border-strong); color: var(--text); box-shadow: none; }
+.demo-btn.reset:hover { background: var(--surface-2); }
+.demo-steps { display: flex; align-items: center; gap: var(--s2); }
+.demo-sep { width: 16px; height: 1px; background: var(--border-strong); }
+.demo-step { display: inline-flex; align-items: center; gap: var(--s2); height: 28px; padding: 0 var(--s3); border-radius: 99px; border: 1px solid var(--border-strong); color: var(--subtle); font-size: var(--fs-12); font-weight: 600; white-space: nowrap; }
+.demo-step .ic { width: 13px; height: 13px; }
+.demo-step.running { color: var(--data); border-color: rgba(124, 198, 232, .5); background: rgba(124, 198, 232, .08); }
+.demo-step.done { color: var(--real); border-color: var(--real-line); background: var(--real-bg); }
+.demo-step.failed { color: var(--loss); border-color: rgba(239, 116, 130, .45); background: rgba(239, 116, 130, .08); }
+.demo-hint { font-size: var(--fs-12); color: var(--muted); }
+body.demo-running .top .box, body.demo-running .top .pop, body.demo-running #resetBtn, body.demo-running .composer { opacity: .45; pointer-events: none; }
 input[type=range] { -webkit-appearance: none; appearance: none; width: 140px; height: 4px; border-radius: 4px; background: var(--border-strong); }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 0; }
 input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 0; }
@@ -257,6 +277,16 @@ svg#map { flex: 1; width: 100%; min-height: 0; }
 <body>
 <div class="app">
 
+  <div class="demo-bar">
+    <button class="demo-btn" id="demoBtn" disabled><i data-lucide="play" class="ic"></i><span>Run demo</span></button>
+    <div class="demo-steps" id="demoSteps" aria-label="Demo stages">
+      <span class="demo-step" data-s="1" data-label="Text">1 Text</span><span class="demo-sep"></span>
+      <span class="demo-step" data-s="2" data-label="Photo">2 Photo</span><span class="demo-sep"></span>
+      <span class="demo-step" data-s="3" data-label="Voice and reroute">3 Voice and reroute</span>
+    </div>
+    <span class="demo-hint" id="demoHint"></span>
+  </div>
+
   <header class="top">
     <div class="brand">
       <span class="mark"><i data-lucide="waypoints" class="ic"></i></span>
@@ -368,10 +398,45 @@ function connect() {
 const cmd = o => ws && ws.readyState === 1 && ws.send(JSON.stringify(o));
 
 const EMPTY = `<div class="empty" id="empty"><b>No messages yet</b>Send text, a photo or a voice note. It will hop from Phone A to the far phone over a radio that loses packets.</div>`;
+/* ---- demo button and stage indicator ---- */
+function resetSteps() {
+  document.querySelectorAll(".demo-step").forEach(e => { e.className = "demo-step"; e.textContent = `${e.dataset.s} ${e.dataset.label}`; });
+}
+function onDemo(ev) {
+  const step = ev.stage && document.querySelector(`.demo-step[data-s="${ev.stage}"]`);
+  if (!step) return;
+  const icon = { running: ic("loader", "spin"), done: ic("check"), failed: ic("circle-alert") }[ev.state] || "";
+  step.className = `demo-step ${ev.state}`;
+  step.innerHTML = `${icon}${ev.stage} ${esc(step.dataset.label)}`;
+}
+function applyDemo(d) {
+  const btn = $("#demoBtn"), hint = $("#demoHint");
+  let icon = "play", label = "Run demo", off = false, reset = false, text = "";
+  if (!d || !d.available) { off = true; text = (d && d.reason) || ""; }
+  else if (d.running) { off = true; icon = "loader"; label = "Running demo"; }
+  else if (d.done) { reset = true; icon = "rotate-ccw"; label = "Reset"; }
+  else if (!d.ready) { off = true; icon = "loader"; label = "Preparing demo"; text = d.reason || ""; }
+  const sig = [icon, label, off, reset].join();
+  if (btn.dataset.sig !== sig) {
+    btn.dataset.sig = sig;
+    btn.innerHTML = `${ic(icon, icon === "loader" ? "spin" : "")}<span>${label}</span>`;
+  }
+  btn.disabled = off; btn.classList.toggle("reset", reset);
+  hint.textContent = text;
+  document.body.classList.toggle("demo-running", !!(d && d.running));
+}
+$("#demoBtn").onclick = async () => {
+  if (cfg && cfg.demo && cfg.demo.done) { cmd({ op: "reset" }); return; }
+  try {
+    const r = await fetch("/api/demo", { method: "POST" });
+    if (!r.ok) toast((await r.json().catch(() => ({}))).error || "The demo could not start.");
+  } catch (err) { toast("Could not reach the server. Check that it is still running."); }
+};
+
 function resetUI() {
   msgs.clear(); $("#thread").innerHTML = EMPTY;
   stats = { sent: 0, lost: 0, air: 0, resends: 0, original: 0, payload: 0 }; renderStats(true);
-  $("#feed").innerHTML = ""; clearRoute();
+  $("#feed").innerHTML = ""; clearRoute(); resetSteps();
 }
 
 /* ================= event handling ================= */
@@ -383,6 +448,7 @@ function handle(ev) {
     case "packet": onPacket(ev); break;
     case "phone": feed(`Phone ${ev.phone} ${ev.dead ? "switched off" : "back on"}`, ev.dead ? "lost" : "good"); break;
     case "reset": resetUI(); break;
+    case "demo": onDemo(ev); break;
     case "message": newMessage(ev); break;
     default: if (m) onMsgEvent(m, ev);
   }
@@ -413,6 +479,7 @@ function applyConfig(c) {
   $("#offlineLbl").textContent = c.offline ? "Offline, AI off" : "Offline";
   preset = `${c.preset} · ${c.kbps} kbps · seed ${c.seed}`;
   showClaim(c.claim, c);
+  applyDemo(c.demo);
   if (geom) buildMap();
   updateMapState();
   buildKillMenu();
@@ -596,7 +663,7 @@ function showGuard(m) {
     : g.status === "flagged" ? chip("warn", "shield-alert", `Guardrail flagged: ${g.rule}`, g.matched || "")
     : g.status === "unavailable" ? chip("warn", "shield-off", "Guardrail unreachable, text not checked", g.reason || "")
     : g.status === "offline" ? chip("plain", "shield-off", "Guardrail skipped while offline")
-    : chip("plain", "shield-check", "Checked by PRISM guardrail, clean", `${g.latency_ms ?? "?"} ms`);
+    : chip("plain", "shield-check", "Checked by PRISM guardrail, clean" + (g.cached ? " · cached" : ""), g.cached ? "Cached from an earlier run of the same text" : `${g.latency_ms ?? "?"} ms`);
 }
 const scroll = () => { const t = $("#thread"); requestAnimationFrame(() => t.scrollTop = t.scrollHeight); };
 function addPart(m, id, label, extra = {}) {
@@ -612,7 +679,7 @@ function onMsgEvent(m, ev) {
     case "parts": ev.parts.forEach(x => addPart(m, x.id, x.label, { bytes: x.bytes, pieces: x.pieces })); m.codec = ev.codec; break;
     case "part_skipped": delete m.parts[ev.part]; m.order = m.order.filter(i => i !== ev.part); break;
     case "caption_eval": m.capEval = ev; if (m.capRx) renderPhoto(m); break;
-    case "caption_made": m.cap = { score: ev.score, reason: ev.reason, text: ev.text }; break;
+    case "caption_made": m.cap = { score: ev.score, reason: ev.reason, text: ev.text, cached: !!ev.cached }; break;
     case "queued": if (p) { p.state = "queued"; p.total = ev.total; } break;
     case "route": if (p) { p.hops = ev.path.length - 1; p.path = ev.path; m.stuck = null; showRoute(ev.path); setPhoneState(ev.path[0], "done"); } break;
     case "hop_start": if (p) { p.state = "sending"; p.hop = [ev.a, ev.b]; p.have = 0; p.total = ev.total; p.hopIdx = p.path ? p.path.indexOf(ev.a) : 0; m.stuck = null; setArc(ev.b, 0, `0/${ev.total}`); } break;
@@ -716,8 +783,8 @@ function evalChip(e) {
   const c = (cls, icon, text) => `<span class="chip ${cls}" ${tip ? `title="${esc(tip)}"` : ""}>${ic(icon)}${esc(text)}</span>`;
   switch (e.status) {
     case "running": return c("plain", "loader", "PRISM evaluator: checking the score…");
-    case "pass": return c("real", "badge-check", `Score passed PRISM rubric · ${e.score}/100`);
-    case "fail": return c("loss", "badge-alert", `Score failed PRISM rubric · ${e.score}/100`);
+    case "pass": return c("real", "badge-check", `Score passed PRISM rubric · ${e.score}/100${e.cached ? " · cached" : ""}`);
+    case "fail": return c("loss", "badge-alert", `Score failed PRISM rubric · ${e.score}/100${e.cached ? " · cached" : ""}`);
     case "pending": return c("plain", "loader", "PRISM evaluator is still running");
     case "not_configured": return c("warn", "badge-alert", "PRISM evaluator not set up");
     default: return c("warn", "badge-alert", "PRISM evaluator unavailable");
@@ -728,7 +795,7 @@ function renderPhoto(m) {
   const cap = $(".cap", body);
   if (m.capRx) {
     cap.hidden = false;
-    const sc = m.cap ? `<span class="chip plain" title="${esc(m.cap.reason)}">Caption check ${m.cap.score.toFixed(2)} of 1</span>` : "";
+    const sc = m.cap ? `<span class="chip plain" title="${esc(m.cap.reason)}">Caption check ${m.cap.score.toFixed(2)} of 1</span>${m.cap.cached ? `<span class="chip plain" title="Made by the AI in an earlier run and saved, so this demo run needs no network">cached from an earlier run</span>` : ""}` : "";
     cap.innerHTML = `<q>${esc(m.capRx)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Caption, ${new Blob([m.capRx]).size} bytes, 1 packet ${sc}${evalChip(m.capEval)}</div>`;
   }
   const have = Object.values(m.layers).sort((a, b) => a.index - b.index);
@@ -773,7 +840,7 @@ function ensureVoice(m) {
 function renderVoice(m) {
   const body = $(".rx-body", m.rx);
   const tr = $(".tr", body);
-  if (m.transcript) { tr.hidden = false; tr.innerHTML = `<q>${esc(m.transcript.text)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Transcript, ${n0(m.transcript.bytes)} bytes${m.audio ? "" : ". It arrived before the audio."}</div>`; }
+  if (m.transcript) { tr.hidden = false; tr.innerHTML = `<q>${esc(m.transcript.text)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Transcript, ${n0(m.transcript.bytes)} bytes${m.audio ? "" : ". It arrived before the audio."}${m.transcript.cached ? `<span class="chip plain" title="Made by the AI in an earlier run and saved, so this demo run needs no network">cached from an earlier run</span>` : ""}</div>`; }
   if (m.audio && !m.playerBuilt) {
     m.playerBuilt = true;
     const pl = $(".player", body); pl.className = "player";

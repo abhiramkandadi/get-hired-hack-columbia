@@ -38,6 +38,18 @@ Each evaluator run costs PRISM credits.
 
 Replace `photo.jpg` with the photo that you will use in the demo. The `--demo` flag turns on demo mode. At startup, demo mode sends that photo once over a private mesh. It takes the bytes that arrive and makes the AI reconstruction from those bytes. It saves the result in `.demo_cache`. When you send the same photo later, the panel appears at once. The panel then says "Cached from an earlier run of the same bytes". The first start takes about one minute. Later starts reuse the cache.
 
+Demo mode also saves the other AI results that the demo needs. These are the caption, its score, the evaluator verdict, the transcript of `voice.m4a`, and the guardrail result for the demo text. The page marks each of them as cached.
+
+## The Run demo button
+
+In demo mode, a Run demo button sits at the top of the page. The button stays grey until the saved results are ready. One click then runs the whole sequence with no more input.
+
+1. The demo sends a text message and waits for Delivered.
+2. The demo sends the photo. The caption arrives, then the three layers, then the three panels.
+3. The demo sends `voice.m4a`. When the audio is half across, it switches off Phone B. The message finds a new route through Phone C and arrives.
+
+A step indicator shows which of the three stages runs. The run uses seed 42 and the saved results, so it makes no network calls. It takes about 20 seconds at 5x speed. When the run ends, the button turns into Reset. Two runs in a row gave the same numbers: 24,981 bytes on air, 23 resends, and 43 of 214 packets lost.
+
 If you leave out `--demo`, run `python server.py`. Every photo then calls the AI live. Set the `PORT` environment variable to change the port.
 
 You can also run the protocol without the page:
@@ -120,7 +132,7 @@ The whole message carries one SHA-256 hash. The app shows Delivered only after t
 
 The photo goes in layers so that something useful arrives early. The 32x32 layer needs 2 pieces. It arrives about 7 simulated seconds after the send starts. If time allows, the better layers follow.
 
-The AI reconstruction runs only at the destination. It uses only the bytes that arrived. If the input is larger than the layer that came over the mesh, a guard in the code stops the call. The guard also stops the call if the input differs from that layer. The AI image never travels over the mesh. The page shows the real pixels, a plain upscale, and the AI image side by side. Green marks real bytes and violet marks AI output.
+The AI reconstruction runs only at the destination. It uses only the bytes that arrived. If the input is larger than the layer that came over the mesh, a guard in the code stops the call. If the input differs from that layer, the guard also stops the call. The AI image never travels over the mesh. The page shows the real pixels, a plain upscale, and the AI image side by side. Green marks real bytes and violet marks AI output.
 
 Every packet leaves a phone through one method, `link.send(packet_bytes)`. The simulator implements it with an airtime delay and a loss roll. A real radio class can implement the same method over a serial port. We kept the class small so that we can point at it.
 

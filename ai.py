@@ -48,7 +48,7 @@ def _for_trace(messages):
     return out
 
 
-def _post_trace(trace):
+def _post_trace(trace, handle=None):
     try:
         host = os.environ.get("PRISMTRACE_HOST", "https://prism.blockconvey.com").rstrip("/")
         r = requests.post(f"{host}/api/traces", json=trace, timeout=15,
@@ -57,12 +57,15 @@ def _post_trace(trace):
             log.warning("PRISM trace %s failed: %s %s", trace["agent_id"], r.status_code, r.text[:200])
         else:
             log.info("PRISM trace %s sent: %s", trace["agent_id"], r.status_code)
+            if handle is not None:
+                handle["row"] = r.json()   # PRISM stores the trace and answers with its row, including its id
     except Exception as e:
         log.warning("PRISM trace %s failed: %s", trace.get("agent_id"), e)
 
 
-def send_trace(agent, session_id, messages, output, latency_ms, model=MODEL):
-    """Send a PRISM trace from a background thread. Never raises."""
+def send_trace(agent, session_id, messages, output, latency_ms, model=MODEL, handle=None):
+    """Send a PRISM trace from a background thread. Never raises.
+    If handle is a dict, it gets "thread" (the sender) and later "row" (what PRISM stored)."""
     try:
         trace = {
             "project_id": os.environ["PRISMTRACE_PROJECT_ID"],
@@ -74,8 +77,10 @@ def send_trace(agent, session_id, messages, output, latency_ms, model=MODEL):
             "agent_name": agent,
             "session_id": session_id,
         }
-        t = threading.Thread(target=_post_trace, args=(trace,), daemon=True)
+        t = threading.Thread(target=_post_trace, args=(trace, handle), daemon=True)
         t.start()
+        if handle is not None:
+            handle["thread"] = t
         _trace_threads.append(t)
     except Exception as e:
         log.warning("PRISM trace %s not sent: %s", agent, e)
@@ -88,12 +93,12 @@ def flush_traces(timeout=20):
     _trace_threads.clear()
 
 
-def _chat(agent, session_id, messages, max_tokens):
+def _chat(agent, session_id, messages, max_tokens, handle=None):
     start = time.time()
     resp = client().chat.completions.create(model=MODEL, messages=messages, max_tokens=max_tokens)
     latency_ms = int((time.time() - start) * 1000)
     text = (resp.choices[0].message.content or "").strip()
-    send_trace(agent, session_id, messages, text, latency_ms)
+    send_trace(agent, session_id, messages, text, latency_ms, handle=handle)
     return text
 
 
@@ -114,7 +119,7 @@ def caption(image_bytes, session_id):
     return text
 
 
-def check_caption(image_bytes, caption_text, session_id):
+def check_caption(image_bytes, caption_text, session_id, handle=None):
     """Returns (score 0 to 1, one sentence of reasoning)."""
     messages = [{"role": "user", "content": [
         {"type": "text", "text": (
@@ -124,7 +129,7 @@ def check_caption(image_bytes, caption_text, session_id):
             'Reply with JSON only: {"score": <number 0 to 1>, "reason": "<one sentence>"}')},
         _image_part(image_bytes),
     ]}]
-    text = _chat("caption-checker", session_id, messages, max_tokens=120)
+    text = _chat("caption-checker", session_id, messages, max_tokens=120, handle=handle)
     found = re.search(r"\{.*\}", text, re.S)
     if not found:
         raise ValueError(f"Caption check did not return JSON: {text!r}")

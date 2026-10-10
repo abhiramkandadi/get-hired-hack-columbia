@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconn
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 import ai
+import prism
 import media
 from mesh import PRESETS, Mesh, airtime, bit_rate
 from transfer import HEADER, TransferStats, make_pieces, send_message
@@ -46,6 +47,7 @@ class Hub:
         self.history = []            # everything except packets, so a new page can catch up
         self.clients = set()
         self.ids = itertools.count(1)
+        self.claim = None       # the preset rate claim, checked against the PRISM Knowledge Base
         self.reset()
 
     def reset(self):
@@ -93,7 +95,7 @@ class Hub:
         return {"type": "config", "phones": {n: {"x": p.x, "y": p.y} for n, p in m.phones.items()},
                 "links": links, "dead": sorted(m.dead), "offline": self.offline,
                 "speed": m.clock.speed, "loss": m.loss_at_spacing, "preset": m.preset,
-                "kbps": round(bit_rate(m.preset) / 1000, 2), "seed": SEED, "src": SRC}
+                "kbps": round(bit_rate(m.preset) / 1000, 2), "seed": SEED, "src": SRC, "claim": self.claim}
 
     def blob(self, data, mime):
         key = f"{len(self.blobs) + 1}-{hashlib.sha1(data).hexdigest()[:8]}"
@@ -267,12 +269,28 @@ def make_caption(mid, path):
     try:
         photo = media.for_ai(path)
         text = ai.caption(photo, f"{mid:08x}")
-        score, reason = ai.check_caption(photo, text, f"{mid:08x}")
+        handle = {}
+        score, reason = ai.check_caption(photo, text, f"{mid:08x}", handle=handle)
         hub.emit({"type": "caption_made", "mid": mid, "text": text, "score": score, "reason": reason})
+        prep_pool.submit(run_caption_evaluator, mid, handle)
         return text.encode("utf-8")
     except Exception as e:
         log.warning("caption failed: %s", e)
         return None
+
+
+def run_caption_evaluator(mid, handle):
+    """The PRISM evaluator checks the caption score against its rubric. It runs on the side and
+    the verdict reaches the page when it is ready. It never holds up the radio."""
+    hub.emit({"type": "caption_eval", "mid": mid, "status": "running"})
+    sender = handle.get("thread")
+    if sender is not None:
+        sender.join(30)
+    row = handle.get("row")
+    if not row:
+        hub.emit({"type": "caption_eval", "mid": mid, "status": "unavailable", "reason": "PRISM did not store the trace"})
+        return
+    hub.emit({"type": "caption_eval", "mid": mid, **prism.evaluate_trace(row["id"], "caption-checker")})
 
 
 def make_transcript(mid, raw, name):
@@ -446,11 +464,19 @@ async def send(kind: str = Form(...), dst: str = Form("E"), text: str = Form("")
     if dst not in hub.mesh.phones or dst == SRC:
         return JSONResponse({"error": "Pick a phone other than A."}, status_code=400)
     mid = next(hub.ids)
-    arg, original, preview = None, 0, None
+    arg, original, preview, guard = None, 0, None, None
     if kind == "text":
         if not text.strip():
             return JSONResponse({"error": "Type a message first."}, status_code=400)
         arg, original = text.strip(), len(text.strip().encode())
+        guard = {"status": "offline"} if hub.offline else await asyncio.to_thread(prism.guardrail_check, arg)
+        if guard["status"] == "blocked":
+            # Nothing is sent and no model sees the text. The trace puts the block on record in PRISM.
+            hub.emit({"type": "message", "mid": mid, "kind": "text", "dst": dst, "src": SRC, "original": 0,
+                      "text": arg, "preview": None, "offline": hub.offline, "guardrail": guard})
+            ai.send_trace("input-guardrail", f"{mid:08x}", [{"role": "user", "content": arg}],
+                          f"blocked by {guard['rule']}: {guard['matched']}", int(guard.get("latency_ms") or 0), model="prism-guardrail")
+            return {"mid": mid, "blocked": True}
     elif kind in ("photo", "voice") and file is not None:
         data = await file.read()
         suffix = os.path.splitext(file.filename or "")[1] or (".jpg" if kind == "photo" else ".webm")
@@ -469,7 +495,8 @@ async def send(kind: str = Form(...), dst: str = Form("E"), text: str = Form("")
         return JSONResponse({"error": "Nothing to send."}, status_code=400)
     hub.original_bytes += original
     hub.emit({"type": "message", "mid": mid, "kind": kind, "dst": dst, "src": SRC, "original": original,
-              "text": text.strip() if kind == "text" else "", "preview": preview, "offline": hub.offline})
+              "text": text.strip() if kind == "text" else "", "preview": preview, "offline": hub.offline,
+              "guardrail": guard if kind == "text" else None})
     jobs.put((hub.epoch, kind, mid, arg, dst))
     return {"mid": mid}
 
@@ -531,11 +558,19 @@ async def pump():
                 hub.clients.discard(sock)
 
 
+def ground_claim():
+    """Check the data rate we show for the radio preset against the PRISM Knowledge Base."""
+    hub.claim = prism.ground_preset_rate(PRESET, round(bit_rate(PRESET) / 1000, 2))
+    log.info("knowledge base claim: %s", hub.claim)
+    hub.emit(hub.config())
+
+
 @app.on_event("startup")
 async def startup():
     hub.loop = asyncio.get_running_loop()
     hub.wake = asyncio.Event()
     asyncio.create_task(pump())
+    threading.Thread(target=ground_claim, daemon=True).start()
     if DEMO_PHOTO:
         threading.Thread(target=prerun_demo, args=(DEMO_PHOTO,), daemon=True).start()
 

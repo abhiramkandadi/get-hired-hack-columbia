@@ -139,6 +139,13 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 
 .chip.stuck { color: var(--loss); border-color: rgba(239,116,130,.45); }
 .chip.ai { color: var(--ai); border-color: var(--ai-line); background: var(--ai-bg); }
 .chip.plain { color: var(--muted); }
+.chip.warn { color: var(--warn); border-color: rgba(230,191,114,.4); }
+.chip.loss { color: var(--loss); border-color: rgba(239,116,130,.45); background: rgba(239,116,130,.08); }
+.chip[title] { cursor: help; }
+.guard { display: flex; justify-content: flex-end; margin-top: var(--s2); }
+.out.blocked { background: rgba(239,116,130,.1); border: 1px solid rgba(239,116,130,.5); color: #f6b4bc; }
+.status.blocked .line { color: var(--loss); } .status.blocked .dot { background: var(--loss); }
+.maphead-l { display: flex; align-items: center; gap: var(--s3); min-width: 0; flex-wrap: wrap; }
 .chip.sel { background: var(--real); border-color: var(--real); color: #07271c; }
 button.chip:disabled { color: var(--subtle); border-style: dashed; cursor: default; }
 
@@ -303,7 +310,7 @@ svg#map { flex: 1; width: 100%; min-height: 0; }
     </section>
 
     <section class="mapcard" aria-label="Mesh map">
-      <div class="maphead"><h2 id="routeText">Mesh map</h2><span id="clockText">Mesh clock 0.0 s</span></div>
+      <div class="maphead"><div class="maphead-l"><h2 id="routeText">Mesh map</h2><span class="chip plain" id="claim"><i data-lucide="book-open" class="ic"></i><span>Checking the Knowledge Base…</span></span></div><span id="clockText">Mesh clock 0.0 s</span></div>
       <svg id="map" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Five phones and the links between them">
         <g id="links"></g><g id="routes"></g><g id="packets"></g><g id="phones"></g>
       </svg>
@@ -381,6 +388,20 @@ function handle(ev) {
   }
 }
 
+function showClaim(k, c) {
+  const chip = $("#claim"), label = $("span", chip);
+  let cls = "plain", text = "Checking the Knowledge Base…", tip = "";
+  if (k) {
+    const src = k.source ? `Source: ${k.source}
+"${k.snippet || ""}"
+PRISM Knowledge Base search is keyword overlap. No model was asked.` : "";
+    if (k.status === "grounded") { cls = "real"; text = `${c.preset} ${c.kbps} kbps · verified in PRISM Knowledge Base`; tip = src; }
+    else if (k.status === "mismatch") { cls = "loss"; text = `Knowledge Base says ${k.found} kbps, not ${c.kbps}`; tip = src; }
+    else if (k.status === "not_found") { cls = "warn"; text = `${c.preset} ${c.kbps} kbps · not found in Knowledge Base`; tip = "No document in the PRISM Knowledge Base states this rate. Run prism_setup.py."; }
+    else { cls = "warn"; text = `${c.preset} ${c.kbps} kbps · Knowledge Base unreachable`; tip = k.reason || ""; }
+  }
+  chip.className = "chip " + cls; label.textContent = text; chip.title = tip;
+}
 function applyConfig(c) {
   const first = !cfg;
   const geom = !cfg || JSON.stringify(cfg.phones) !== JSON.stringify(c.phones);
@@ -391,6 +412,7 @@ function applyConfig(c) {
   $("#offline").setAttribute("aria-checked", String(c.offline));
   $("#offlineLbl").textContent = c.offline ? "Offline, AI off" : "Offline";
   preset = `${c.preset} · ${c.kbps} kbps · seed ${c.seed}`;
+  showClaim(c.claim, c);
   if (geom) buildMap();
   updateMapState();
   buildKillMenu();
@@ -553,15 +575,28 @@ function newMessage(ev) {
     layers: {}, sel: null, cap: null, capRx: null, transcript: null, audio: null };
   msgs.set(ev.mid, m);
   const root = el("div", "msg"); m.root = root;
-  const out = el("div", "out" + (ev.kind === "voice" ? " voice" : ""));
+  const g = ev.guardrail || null;
+  m.blocked = !!(g && g.status === "blocked");
+  const out = el("div", "out" + (ev.kind === "voice" ? " voice" : "") + (m.blocked ? " blocked" : ""));
   if (ev.kind === "text") out.textContent = ev.text;
   else if (ev.kind === "photo") out.innerHTML = `<img alt="Photo you sent" src="${ev.preview}"><div class="meta">Original photo, ${n0(ev.original)} bytes</div>`;
   else out.innerHTML = `<div class="wave">${WAVE.map(h => `<i style="height:${h}px"></i>`).join("")}</div><div class="meta">Voice note<br>${n0(ev.original)} bytes</div>`;
-  m.status = el("div", "status queued", `<span class="line"><span class="dot"></span><span class="txt">Queued</span></span><span class="sub"></span><div class="bar"><b></b></div><div class="steps"></div>`);
+  m.status = el("div", "status queued", `<span class="line"><span class="dot"></span><span class="txt">Queued</span></span><span class="sub"></span><div class="bar"><b></b></div><div class="steps"></div><div class="guard"></div>`);
   root.append(out, m.status);
-  if (ev.kind === "text") addPart(m, "text", "Message");
+  if (g) { m.guard = g; showGuard(m); }
+  if (ev.kind === "text" && !m.blocked) addPart(m, "text", "Message");
+  if (m.blocked) toast(`PRISM guardrail blocked this message: ${g.rule}. Nothing was sent.`);
   $("#thread").appendChild(root); scroll();
   setStatus(m); renderStats();
+}
+function showGuard(m) {
+  const g = m.guard, box = $(".guard", m.status);
+  const chip = (cls, icon, text, tip = "") => `<span class="chip ${cls}" ${tip ? `title="${esc(tip)}"` : ""}>${ic(icon)}${esc(text)}</span>`;
+  box.innerHTML = g.status === "blocked" ? chip("loss", "shield-alert", `Guardrail blocked: ${g.rule}`, g.matched || "")
+    : g.status === "flagged" ? chip("warn", "shield-alert", `Guardrail flagged: ${g.rule}`, g.matched || "")
+    : g.status === "unavailable" ? chip("warn", "shield-off", "Guardrail unreachable, text not checked", g.reason || "")
+    : g.status === "offline" ? chip("plain", "shield-off", "Guardrail skipped while offline")
+    : chip("plain", "shield-check", "Checked by PRISM guardrail, clean", `${g.latency_ms ?? "?"} ms`);
 }
 const scroll = () => { const t = $("#thread"); requestAnimationFrame(() => t.scrollTop = t.scrollHeight); };
 function addPart(m, id, label, extra = {}) {
@@ -576,6 +611,7 @@ function onMsgEvent(m, ev) {
     case "notice": m.root.insertBefore(el("div", "notice", ic("info") + esc(ev.text)), m.status); break;
     case "parts": ev.parts.forEach(x => addPart(m, x.id, x.label, { bytes: x.bytes, pieces: x.pieces })); m.codec = ev.codec; break;
     case "part_skipped": delete m.parts[ev.part]; m.order = m.order.filter(i => i !== ev.part); break;
+    case "caption_eval": m.capEval = ev; if (m.capRx) renderPhoto(m); break;
     case "caption_made": m.cap = { score: ev.score, reason: ev.reason, text: ev.text }; break;
     case "queued": if (p) { p.state = "queued"; p.total = ev.total; } break;
     case "route": if (p) { p.hops = ev.path.length - 1; p.path = ev.path; m.stuck = null; showRoute(ev.path); setPhoneState(ev.path[0], "done"); } break;
@@ -618,6 +654,13 @@ function partText(p, multi) {
   }
 }
 function setStatus(m) {
+  if (m.blocked) {
+    m.status.className = "status blocked";
+    $(".txt", m.status).textContent = "Blocked, not sent";
+    $(".sub", m.status).textContent = `${m.guard.matched || m.guard.rule}. No model saw this text.`;
+    $(".bar", m.status).style.display = "none";
+    return;
+  }
   const list = m.order.map(i => m.parts[i]);
   const multi = list.length > 1;
   const allDone = list.length > 0 && list.every(p => p.state === "delivered");
@@ -667,13 +710,26 @@ function ensurePhoto(m) {
   if (m.photoBuilt) return; m.photoBuilt = true;
   $(".rx-body", rxCard(m)).innerHTML = `<div class="aibox cap" hidden></div><div class="layers"></div><div class="trio"></div>`;
 }
+function evalChip(e) {
+  if (!e) return "";
+  const tip = e.reasoning ? `${e.evaluator}: ${e.reasoning}` : (e.reason || e.evaluator || "");
+  const c = (cls, icon, text) => `<span class="chip ${cls}" ${tip ? `title="${esc(tip)}"` : ""}>${ic(icon)}${esc(text)}</span>`;
+  switch (e.status) {
+    case "running": return c("plain", "loader", "PRISM evaluator: checking the score…");
+    case "pass": return c("real", "badge-check", `Score passed PRISM rubric · ${e.score}/100`);
+    case "fail": return c("loss", "badge-alert", `Score failed PRISM rubric · ${e.score}/100`);
+    case "pending": return c("plain", "loader", "PRISM evaluator is still running");
+    case "not_configured": return c("warn", "badge-alert", "PRISM evaluator not set up");
+    default: return c("warn", "badge-alert", "PRISM evaluator unavailable");
+  }
+}
 function renderPhoto(m) {
   const body = $(".rx-body", m.rx);
   const cap = $(".cap", body);
   if (m.capRx) {
     cap.hidden = false;
     const sc = m.cap ? `<span class="chip plain" title="${esc(m.cap.reason)}">Caption check ${m.cap.score.toFixed(2)} of 1</span>` : "";
-    cap.innerHTML = `<q>${esc(m.capRx)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Caption, ${new Blob([m.capRx]).size} bytes, 1 packet ${sc}</div>`;
+    cap.innerHTML = `<q>${esc(m.capRx)}</q><div class="row"><span class="chip ai">${ic("sparkles")}AI made this</span>Caption, ${new Blob([m.capRx]).size} bytes, 1 packet ${sc}${evalChip(m.capEval)}</div>`;
   }
   const have = Object.values(m.layers).sort((a, b) => a.index - b.index);
   const sel = have.find(l => l.part === (m.sel && m.sel.id)) || have[have.length - 1];
